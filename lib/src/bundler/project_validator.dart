@@ -7,6 +7,7 @@ import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
 import 'file_classifier.dart';
+import 'file_scanner.dart';
 
 /// Input to the [ProjectValidator]: the source [dir] and its [manifest].
 class ProjectInput {
@@ -45,14 +46,24 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       ]);
     }
 
-    final files = dir.listSync(recursive: true).whereType<File>().toList();
-    if (files.isEmpty) {
+    // Validate exactly the files the Bundler will pack: same scanner, same
+    // include/exclude filters, same symlink handling. Walking the directory
+    // directly would validate against files that never reach the archive.
+    final relPaths = FileScanner(
+      include: input.manifest.include,
+      exclude: input.manifest.exclude,
+    ).scan(input.dir);
+    if (relPaths.isEmpty) {
       return ValidationResult([
-        ValidationError(dirEmpty, 'Source directory is empty: ${input.dir}'),
+        ValidationError(
+          dirEmpty,
+          'No files to pack in ${input.dir} (empty, or everything is '
+          'excluded).',
+        ),
       ]);
     }
 
-    final haystack = _haystack(input.dir, input.manifest, files);
+    final haystack = _haystack(input.dir, input.manifest, relPaths);
     final issues = <ValidationError>[];
     for (final variable in input.manifest.variables) {
       final token = variable.replaces;
@@ -85,19 +96,20 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   }
 
   /// All relative paths plus the contents of text files, concatenated.
-  String _haystack(String dir, Manifest manifest, List<File> files) {
+  String _haystack(String dir, Manifest manifest, List<String> relPaths) {
     final classifier = FileClassifier(
       extraBinary: manifest.binaryExtensions.toSet(),
     );
     final buffer = StringBuffer();
-    for (final file in files) {
-      final rel = p.relative(file.path, from: dir);
+    for (final rel in relPaths) {
       buffer.writeln(rel);
       if (!classifier.isBinary(rel)) {
         try {
-          buffer.writeln(file.readAsStringSync());
+          buffer.writeln(File(p.join(dir, rel)).readAsStringSync());
         } on FileSystemException {
           // Unreadable file — skip its contents.
+        } on FormatException {
+          // Non-UTF-8 despite a text extension — skip its contents.
         }
       }
     }
