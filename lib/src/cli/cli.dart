@@ -106,9 +106,12 @@ class PackCommand extends Command<int> {
         projectDir: sourceDir,
         manifest: manifest,
       );
-      final content = _render(format, archive, manifest.name);
-
+      // One stem drives both the file name and the generated const identifier;
+      // rendering from manifest.name here would make `-n foo` write foo.dart
+      // declaring kDemoTemplate.
       final stem = (results['name'] as String?) ?? manifest.name;
+      final content = _render(format, archive, stem);
+
       final ext = format == OutputFormat.tarGz ? 'mold' : 'dart';
       final outputPath = (results['output'] as String?) ?? './$stem.$ext';
       File(outputPath)

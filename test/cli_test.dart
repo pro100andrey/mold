@@ -111,6 +111,27 @@ variables:
       expect(src, contains('const List<int> kSuperServerTemplate = <int>['));
     });
 
+    test('pack -f bytes names the const after -n, not the manifest', () async {
+      writeManifest();
+      final out = p.join(tmp.path, 'foo.dart');
+      expect(
+        await runBundleCli([
+          'pack',
+          project.path,
+          '-o',
+          out,
+          '-n',
+          'foo',
+          '-f',
+          'bytes',
+        ]),
+        0,
+      );
+      final src = File(out).readAsStringSync();
+      expect(src, contains('const List<int> kFooTemplate = <int>['));
+      expect(src, isNot(contains('kSuperServerTemplate')));
+    });
+
     test('pack -f bytes defaults the output extension to .dart', () async {
       writeManifest();
       // No -o: default path is ./<name>.dart, written into cwd. Run in a temp

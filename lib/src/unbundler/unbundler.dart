@@ -130,6 +130,7 @@ class Unbundler implements UnbundlerBase {
     final noSubstitute = manifest.noSubstitute.map(Glob.new).toList();
 
     final target = Directory(targetDir)..createSync(recursive: true);
+    final restoreExecutable = <String>[];
     for (final entry in archive.files.entries) {
       final outRel = pathSubstitutor.apply(entry.key);
       // Re-checked after substitution, and independently of ArchiveValidator,
@@ -156,6 +157,26 @@ class Unbundler implements UnbundlerBase {
       } else {
         out.writeAsStringSync(contentSubstitutor.apply(decoded));
       }
+      if (archive.executable.contains(entry.key)) {
+        restoreExecutable.add(outPath);
+      }
+    }
+    _makeExecutable(restoreExecutable);
+  }
+
+  /// Restores the owner-executable bit on [paths].
+  ///
+  /// `dart:io` exposes no chmod, so this shells out — batched into one call
+  /// rather than one per file. A no-op on Windows, which has no such bit, and
+  /// best-effort elsewhere: failing to chmod must not discard a valid unpack.
+  void _makeExecutable(List<String> paths) {
+    if (paths.isEmpty || Platform.isWindows) {
+      return;
+    }
+    try {
+      Process.runSync('chmod', ['+x', ...paths]);
+    } on ProcessException {
+      // chmod unavailable — the files are written, just not executable.
     }
   }
 
