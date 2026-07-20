@@ -9,6 +9,13 @@ import '../validation/validator_base.dart';
 import 'file_classifier.dart';
 import 'file_scanner.dart';
 
+/// Which `replaces` tokens were seen while scanning, and which of them also
+/// occurred inside a larger word.
+class _TokenOccurrence {
+  final Set<String> found = {};
+  final Set<String> overlapping = {};
+}
+
 /// Input to the [ProjectValidator]: the source [dir] and its [manifest].
 class ProjectInput {
   const ProjectInput({required this.dir, required this.manifest});
@@ -54,50 +61,53 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       include: input.manifest.include,
       exclude: input.manifest.exclude,
     ).scan(input.dir);
+    // Built before the empty check: when every file turned out to be a skipped
+    // symlink, these warnings are the explanation for the error below.
+    final issues = <ValidationError>[
+      for (final entry in scan.skippedLinks.entries)
+        ValidationError.warning(
+          symlinkSkipped,
+          "Symlink '${entry.key}' is not packed: ${entry.value.message}.",
+          field: entry.key,
+        ),
+    ];
+
     final relPaths = scan.files;
     if (relPaths.isEmpty) {
       return ValidationResult([
+        ...issues,
         ValidationError(
           dirEmpty,
           'No files to pack in ${input.dir} (empty, or everything is '
-          'excluded).',
+          'excluded or skipped).',
         ),
       ]);
     }
 
-    final haystack = _haystack(input.dir, input.manifest, relPaths);
-    final issues = <ValidationError>[];
-    for (final entry in scan.skippedLinks.entries) {
-      issues.add(
-        ValidationError.warning(
-          symlinkSkipped,
-          "Symlink '${entry.key}' is not packed: ${entry.value}.",
-          field: entry.key,
-        ),
-      );
-    }
-    for (final variable in input.manifest.variables) {
-      final token = variable.replaces;
-      if (token == null || token.isEmpty) {
-        continue;
-      }
+    final tokens = <String, String>{
+      for (final variable in input.manifest.variables)
+        if (variable.replaces case final t? when t.isNotEmpty) variable.name: t,
+    };
+    final occurrence = _findTokens(input.dir, input.manifest, relPaths, tokens);
 
-      if (!haystack.contains(token)) {
+    for (final entry in tokens.entries) {
+      final name = entry.key;
+      final token = entry.value;
+      if (!occurrence.found.contains(token)) {
         issues.add(
           ValidationError(
             replacesNotFound,
-            "Variable '${variable.name}': token '$token' does not occur in "
-            'the project.',
-            field: variable.name,
+            "Variable '$name': token '$token' does not occur in the project.",
+            field: name,
           ),
         );
-      } else if (_hasAdjacentWordChar(haystack, token)) {
+      } else if (occurrence.overlapping.contains(token)) {
         issues.add(
           ValidationError.warning(
             partialOverlap,
-            "Variable '${variable.name}': token '$token' also appears inside "
-            'larger words; substitution may over-reach.',
-            field: variable.name,
+            "Variable '$name': token '$token' also appears inside larger "
+            'words; substitution may over-reach.',
+            field: name,
           ),
         );
       }
@@ -106,26 +116,56 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
     return ValidationResult(issues);
   }
 
-  /// All relative paths plus the contents of text files, concatenated.
-  String _haystack(String dir, Manifest manifest, List<String> relPaths) {
+  /// Which [tokens] occur anywhere in the packed paths and text contents, and
+  /// which of those also appear inside larger words.
+  ///
+  /// Scans file by file and stops as soon as every token is decided on both
+  /// counts, so a large project is never concatenated into one string nor
+  /// re-walked once per variable.
+  _TokenOccurrence _findTokens(
+    String dir,
+    Manifest manifest,
+    List<String> relPaths,
+    Map<String, String> tokens,
+  ) {
+    final result = _TokenOccurrence();
+    if (tokens.isEmpty) {
+      return result;
+    }
+    final distinct = tokens.values.toSet();
     final classifier = FileClassifier(
       extraBinary: manifest.binaryExtensions.toSet(),
     );
-    final buffer = StringBuffer();
+
     for (final rel in relPaths) {
-      buffer.writeln(rel);
+      var chunk = '$rel\n';
       if (!classifier.isBinary(rel)) {
         try {
-          buffer.writeln(File(p.join(dir, rel)).readAsStringSync());
+          chunk += File(p.join(dir, rel)).readAsStringSync();
         } on FileSystemException {
           // Unreadable file — skip its contents.
         } on FormatException {
           // Non-UTF-8 despite a text extension — skip its contents.
         }
       }
+
+      for (final token in distinct) {
+        if (result.overlapping.contains(token)) {
+          continue; // Already decided on both counts.
+        }
+        if (chunk.contains(token)) {
+          result.found.add(token);
+          if (_hasAdjacentWordChar(chunk, token)) {
+            result.overlapping.add(token);
+          }
+        }
+      }
+      if (result.overlapping.length == distinct.length) {
+        break;
+      }
     }
 
-    return buffer.toString();
+    return result;
   }
 
   /// Whether any occurrence of [token] in [hay] is adjacent to a word char,

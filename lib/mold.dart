@@ -8,7 +8,7 @@ export 'src/archive/archive_validator.dart' show ArchiveValidator;
 export 'src/archive/archive_writer.dart' show ArchiveWriter;
 export 'src/bundler/bundler.dart' show Bundler, BundlerBase;
 export 'src/bundler/file_classifier.dart' show FileClassifier, FileKind;
-export 'src/bundler/file_scanner.dart' show FileScanner, ScanResult;
+export 'src/bundler/file_scanner.dart' show FileScanner, ScanResult, SkipReason;
 export 'src/bundler/project_validator.dart' show ProjectInput, ProjectValidator;
 export 'src/cli/cli.dart'
     show CliException, PackCommand, UnpackCommand, buildRunner, runBundleCli;

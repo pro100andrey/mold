@@ -43,18 +43,11 @@ class Bundler implements BundlerBase {
       include: manifest.include,
       exclude: manifest.exclude,
     );
-    final relPaths = scanner.scan(projectDir).files;
+    final scan = scanner.scan(projectDir);
 
     final files = <String, List<int>>{};
-    final executable = <String>{};
-    for (final rel in relPaths) {
-      final file = File(p.join(projectDir, rel));
-      files[rel] = file.readAsBytesSync();
-      // 0o100 — owner-execute. Recorded so a template's scripts and hooks
-      // do not unpack as non-executable.
-      if (file.statSync().mode & 64 != 0) {
-        executable.add(rel);
-      }
+    for (final rel in scan.files) {
+      files[rel] = File(p.join(projectDir, rel)).readAsBytesSync();
     }
 
     // A manifest read from a file embeds byte-for-byte; one built in code is
@@ -64,7 +57,7 @@ class Bundler implements BundlerBase {
     return const ArchiveWriter().write(
       manifestYaml: manifestYaml,
       files: files,
-      executable: executable,
+      executable: scan.executable,
     );
   }
 }
