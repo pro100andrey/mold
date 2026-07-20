@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:glob/glob.dart';
 import 'package:path/path.dart' as p;
 
+import '../archive/archive_path.dart';
 import '../archive/archive_reader.dart';
 import '../archive/archive_validator.dart';
 import '../bundler/file_classifier.dart';
@@ -131,6 +132,13 @@ class Unbundler implements UnbundlerBase {
     final target = Directory(targetDir)..createSync(recursive: true);
     for (final entry in archive.files.entries) {
       final outRel = pathSubstitutor.apply(entry.key);
+      // Re-checked after substitution, and independently of ArchiveValidator,
+      // so a direct library call can never write outside its target directory.
+      if (!isContainedArchivePath(outRel)) {
+        throw FormatException(
+          "Archive entry escapes the target directory: 'files/${entry.key}'.",
+        );
+      }
       final outPath = p.join(target.path, outRel);
       final out = File(outPath)..parent.createSync(recursive: true);
 

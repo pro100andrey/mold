@@ -2,6 +2,7 @@
 /// with manifest-driven renaming.
 library;
 
+export 'src/archive/archive_path.dart' show isContainedArchivePath;
 export 'src/archive/archive_reader.dart' show ArchiveReader, BundleArchive;
 export 'src/archive/archive_validator.dart' show ArchiveValidator;
 export 'src/archive/archive_writer.dart' show ArchiveWriter;

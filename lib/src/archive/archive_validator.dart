@@ -3,15 +3,18 @@ import 'package:archive/archive.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
+import 'archive_path.dart';
 
 /// Validates raw archive bytes (unpack phase): a decodable gzip+tar that
-/// contains the embedded `mold.yaml` and a `files/` tree.
+/// contains the embedded `mold.yaml` and a `files/` tree, and whose entries all
+/// stay inside that tree (no `..` traversal out of the target directory).
 class ArchiveValidator extends ValidatorBase<List<int>> {
   const ArchiveValidator();
 
   static const invalid = 'ARCHIVE_INVALID';
   static const missingManifest = 'ARCHIVE_MISSING_MANIFEST';
   static const missingFiles = 'ARCHIVE_MISSING_FILES';
+  static const unsafePath = 'ARCHIVE_UNSAFE_PATH';
 
   @override
   String get phase => 'archive';
@@ -51,7 +54,22 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
         ),
       );
     }
-    
+
+    for (final name in names) {
+      if (!name.startsWith('files/')) {
+        continue;
+      }
+      final rel = name.substring('files/'.length);
+      if (!isContainedArchivePath(rel)) {
+        issues.add(
+          ValidationError(
+            unsafePath,
+            "Archive entry escapes the target directory: '$name'.",
+          ),
+        );
+      }
+    }
+
     return ValidationResult(issues);
   }
 }
