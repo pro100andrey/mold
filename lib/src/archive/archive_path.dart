@@ -15,7 +15,10 @@ bool isContainedArchivePath(String relPath) {
   if (relPath.isEmpty || relPath.contains(r'\')) {
     return false;
   }
-  // A leading `/` or a `C:` prefix makes p.join discard the target root.
+  // A leading `/`, or a drive root like `C:/`, makes p.join discard the target
+  // root entirely (`join(r'C:\target', 'C:/Windows')` is `C:/Windows`). A
+  // drive-*relative* name such as `C:notes.txt` has no separator after the
+  // colon, so join keeps it under the target and it stays allowed.
   if (p.posix.isAbsolute(relPath) || p.windows.isAbsolute(relPath)) {
     return false;
   }

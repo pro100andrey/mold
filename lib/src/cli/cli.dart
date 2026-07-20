@@ -217,6 +217,7 @@ class UnpackCommand extends Command<int> {
         targetDir: targetDir,
         vars: vars,
         resolver: resolver,
+        onWarning: (message) => _err.writeln('Warning: $message'),
       );
       _err.writeln('Unpacked into $targetDir.');
       return 0;

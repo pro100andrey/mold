@@ -83,8 +83,11 @@ void main() {
 
     setUp(() => tmp = Directory.systemTemp.createTempSync('mold_probe_'));
     tearDown(() {
-      // Restore permissions so the temp tree can be removed.
-      Process.runSync('chmod', ['-R', 'u+w', tmp.path]);
+      // Restore permissions so the temp tree can be removed. Guarded: there is
+      // no chmod on Windows, and the group's other test runs there.
+      if (!Platform.isWindows) {
+        Process.runSync('chmod', ['-R', 'u+w', tmp.path]);
+      }
       tmp.deleteSync(recursive: true);
     });
 

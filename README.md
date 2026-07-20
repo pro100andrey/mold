@@ -197,6 +197,15 @@ await const Unbundler().unbundleBytes(
 Precedence: explicit `vars` › `--no-prompt` (manifest defaults) › interactive
 prompt.
 
+A variable that none of those can fill is **left out** of the resolved map
+rather than raising on the spot, so `VariablesValidator` reports every gap at
+once as `VARIABLE_MISSING`. Catch `ValidationException` — not `FormatException`
+— to handle a missing variable.
+
+`unbundleBytes` / `unbundleFile` / `unbundle` also take an `onWarning` callback,
+which receives non-fatal problems that would otherwise be invisible, such as
+failing to restore an executable bit. The CLI prints these to stderr.
+
 ### Rendering embed sources programmatically
 
 ```dart

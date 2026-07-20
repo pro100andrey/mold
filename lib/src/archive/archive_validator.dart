@@ -64,7 +64,8 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
         issues.add(
           ValidationError(
             unsafePath,
-            "Archive entry escapes the target directory: '$name'.",
+            "Archive entry '$name' is not a contained relative path "
+            '(traversal, absolute, or drive-qualified).',
           ),
         );
       }

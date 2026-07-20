@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:glob/glob.dart';
 import 'package:path/path.dart' as p;
@@ -39,14 +40,18 @@ class Unbundler implements UnbundlerBase {
   ///
   /// [vars] holds explicit `--var` values; any variable absent from it is
   /// resolved by [resolver] (default/prompt per its configuration). Without a
-  /// [resolver], unresolved variables fall back to the manifest `default` or,
-  /// lacking one, throw.
+  /// [resolver], unresolved variables fall back to the manifest `default`; one
+  /// with no default is reported by `VariablesValidator`.
+  ///
+  /// [onWarning] receives non-fatal problems that would otherwise be silent,
+  /// such as failing to restore an executable bit.
   @override
   Future<void> unbundle({
     required List<int> bytes,
     required String targetDir,
     Map<String, String> vars = const {},
     VariableResolver? resolver,
+    void Function(String message)? onWarning,
   }) {
     // Phase order: archive → manifest → target → variables. The first failing
     // phase aborts before the next runs.
@@ -70,7 +75,13 @@ class Unbundler implements UnbundlerBase {
         )
         .throwIfInvalid();
 
-    _write(archive, manifest, targetDir, resolved);
+    // Re-checked immediately before writing. Resolving variables may block on
+    // interactive input for minutes, and the earlier check is what keeps the
+    // user from typing answers that get thrown away — it is not a claim that
+    // the target is still free once they finish.
+    const TargetValidator().validate(targetDir).throwIfInvalid();
+
+    _write(archive, manifest, targetDir, resolved, onWarning);
 
     return .value();
   }
@@ -82,11 +93,13 @@ class Unbundler implements UnbundlerBase {
     required String targetDir,
     Map<String, String> vars = const {},
     VariableResolver? resolver,
+    void Function(String message)? onWarning,
   }) => unbundle(
     bytes: source,
     targetDir: targetDir,
     vars: vars,
     resolver: resolver,
+    onWarning: onWarning,
   );
 
   /// Reads the archive at the file [source] and unpacks it into [targetDir].
@@ -95,6 +108,7 @@ class Unbundler implements UnbundlerBase {
     required String targetDir,
     Map<String, String> vars = const {},
     VariableResolver? resolver,
+    void Function(String message)? onWarning,
   }) {
     final file = File(source);
     if (!file.existsSync()) {
@@ -106,6 +120,7 @@ class Unbundler implements UnbundlerBase {
       targetDir: targetDir,
       vars: vars,
       resolver: resolver,
+      onWarning: onWarning,
     );
   }
 
@@ -121,6 +136,7 @@ class Unbundler implements UnbundlerBase {
     Manifest manifest,
     String targetDir,
     Map<String, String> resolved,
+    void Function(String message)? onWarning,
   ) {
     final renames = _buildTable(manifest, resolved);
     final pathSubstitutor = Substitutor(renames);
@@ -141,7 +157,8 @@ class Unbundler implements UnbundlerBase {
       // so a direct library call can never write outside its target directory.
       if (!isContainedArchivePath(outRel)) {
         throw FormatException(
-          "Archive entry escapes the target directory: 'files/${entry.key}'.",
+          "Archive entry 'files/${entry.key}' is not a contained relative "
+          'path (traversal, absolute, or drive-qualified).',
         );
       }
       final outPath = p.join(target.path, outRel);
@@ -165,22 +182,38 @@ class Unbundler implements UnbundlerBase {
         restoreExecutable.add(outPath);
       }
     }
-    _makeExecutable(restoreExecutable);
+    _makeExecutable(restoreExecutable, onWarning);
   }
 
   /// Restores the owner-executable bit on [paths].
   ///
-  /// `dart:io` exposes no chmod, so this shells out — batched into one call
-  /// rather than one per file. A no-op on Windows, which has no such bit, and
-  /// best-effort elsewhere: failing to chmod must not discard a valid unpack.
-  void _makeExecutable(List<String> paths) {
+  /// `dart:io` exposes no chmod, so this shells out. A no-op on Windows, which
+  /// has no such bit; best-effort elsewhere, since failing to chmod must not
+  /// discard an otherwise valid unpack — but the failure is reported through
+  /// [warn] rather than swallowed, or the user meets it later as "permission
+  /// denied" in the scaffolded project.
+  ///
+  /// Batched, but in chunks: one exec with a few thousand paths would exceed
+  /// ARG_MAX and fail with E2BIG — a non-zero exit code, not an exception, so
+  /// an unchecked call would leave every file non-executable in silence.
+  void _makeExecutable(List<String> paths, void Function(String)? warn) {
     if (paths.isEmpty || Platform.isWindows) {
       return;
     }
-    try {
-      Process.runSync('chmod', ['+x', ...paths]);
-    } on ProcessException {
-      // chmod unavailable — the files are written, just not executable.
+    const chunkSize = 500;
+    for (var i = 0; i < paths.length; i += chunkSize) {
+      final chunk = paths.sublist(i, min(i + chunkSize, paths.length));
+      try {
+        final result = Process.runSync('chmod', ['+x', ...chunk]);
+        if (result.exitCode != 0) {
+          warn?.call(
+            'Could not make ${chunk.length} file(s) executable: '
+            '${result.stderr}',
+          );
+        }
+      } on ProcessException catch (e) {
+        warn?.call('Could not run chmod: ${e.message}');
+      }
     }
   }
 

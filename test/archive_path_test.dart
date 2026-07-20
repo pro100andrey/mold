@@ -37,6 +37,15 @@ void main() {
     test('rejects absolute and drive-qualified paths', () {
       expect(isContainedArchivePath('/etc/passwd'), isFalse);
       expect(isContainedArchivePath(r'C:\Windows\system32'), isFalse);
+      // Forward slashes, so the backslash guard does not fire first and the
+      // windows-absolute check is the thing actually under test.
+      expect(isContainedArchivePath('C:/Windows/system32'), isFalse);
+    });
+
+    test('accepts a drive-relative name, which cannot escape', () {
+      // `C:notes.txt` has no separator after the colon, so p.join keeps it
+      // under the target (C:\target\C:notes.txt) rather than rooting it.
+      expect(isContainedArchivePath('C:notes.txt'), isTrue);
     });
 
     test('rejects backslashes, which separate on Windows', () {

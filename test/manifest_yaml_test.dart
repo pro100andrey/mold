@@ -63,6 +63,33 @@ void main() {
       expect(parsed.extraSubstitutions.first.to, '#hash: yes');
     });
 
+    test('preserves newlines, tabs, quotes and backslashes', () {
+      // A single-quoted YAML scalar folds line breaks into spaces, so a
+      // multi-line substitution would silently stop matching its source text.
+      const original = Manifest(
+        name: 'x',
+        version: '1',
+        variables: [
+          TemplateVariable(name: 'v', description: 'line one\nline two'),
+        ],
+        extraSubstitutions: [
+          Substitution(from: '// Copyright\n// All rights\n', to: ''),
+          Substitution(from: r'C:\path "quoted"', to: 'a\tb'),
+        ],
+      );
+
+      final parsed = Manifest.fromYaml(original.toYaml());
+
+      expect(parsed.variables.first.description, 'line one\nline two');
+      expect(
+        parsed.extraSubstitutions.first.from,
+        '// Copyright\n// All rights\n',
+      );
+      expect(parsed.extraSubstitutions.first.to, '');
+      expect(parsed.extraSubstitutions[1].from, r'C:\path "quoted"');
+      expect(parsed.extraSubstitutions[1].to, 'a\tb');
+    });
+
     test('omits empty sections', () {
       const minimal = Manifest(name: 'x', version: '1');
       final yaml = minimal.toYaml();

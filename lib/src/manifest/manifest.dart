@@ -184,14 +184,26 @@ class Manifest {
     }
   }
 
-  /// Renders [value] as a single-quoted YAML scalar.
+  /// Renders [value] as a double-quoted YAML scalar.
   ///
   /// Quoting unconditionally rather than only when "needed": glob patterns
   /// (`**`, `*.g.dart`), values containing `:`, and version-like strings each
-  /// have their own plain-scalar hazard, and a single-quoted scalar with `'`
-  /// doubled is unambiguous for all of them.
-  static String _scalar(String value) =>
-      "'${value.replaceAll("'", "''")}'";
+  /// have their own plain-scalar hazard.
+  ///
+  /// Double-quoted rather than single-quoted, because a single-quoted scalar
+  /// has no escape for a line break — it may only span lines, and YAML then
+  /// *folds* each break into a space. A multi-line `extra_substitutions.from`
+  /// would come back with its newlines silently replaced. Double quotes are
+  /// the only YAML flow style with a real `\n` escape.
+  static String _scalar(String value) {
+    final escaped = value
+        .replaceAll(r'\', r'\\') // First: later escapes add backslashes.
+        .replaceAll('"', r'\"')
+        .replaceAll('\n', r'\n')
+        .replaceAll('\r', r'\r')
+        .replaceAll('\t', r'\t');
+    return '"$escaped"';
+  }
 
   /// Reads an optional scalar as a string; missing → empty. Required-field
   /// enforcement is the `ManifestValidator`'s job, so parsing stays lenient.

@@ -261,6 +261,20 @@ variables:
         expect(r, rejectsWith(VariablesValidator.missing));
       });
 
+      test('a variable with a default is not missing when absent', () {
+        // The validator is public: a caller may pass a map covering only the
+        // variables it wants to override, leaving defaults to fill the rest.
+        const withDefault = TemplateVariable(
+          name: 'p',
+          defaultValue: 'my_project',
+          replaces: 'super_server',
+        );
+        final r = validator.validate(
+          const VariablesInput(variables: [withDefault], values: {}),
+        );
+        expect(r.isValid, isTrue);
+      });
+
       test('VARIABLE_INVALID_FORMAT', () {
         final r = validator.validate(
           const VariablesInput(

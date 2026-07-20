@@ -35,16 +35,21 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
     final issues = <ValidationError>[];
     for (final variable in input.variables) {
       final value = input.values[variable.name];
-      // The resolver has already applied `--var` values and manifest defaults,
-      // so an absent key here means the variable is genuinely unresolved.
+      // An absent key is only a problem when nothing can fill it. A caller
+      // passing a partial map for variables that declare defaults is valid —
+      // requiring the map to be post-resolver would couple this validator to
+      // one caller without saying so in its signature.
       if (value == null) {
-        issues.add(
-          ValidationError(
-            missing,
-            "Required variable '${variable.name}' has no value and no default.",
-            field: variable.name,
-          ),
-        );
+        if (variable.defaultValue == null) {
+          issues.add(
+            ValidationError(
+              missing,
+              "Required variable '${variable.name}' has no value and no "
+              'default.',
+              field: variable.name,
+            ),
+          );
+        }
         continue;
       }
 
