@@ -24,6 +24,10 @@ generates all four casings of every `replaces` token, rewrites paths and text
 file contents, and copies binary / `no_substitute` files byte-for-byte. The
 archive is materialized in memory — no scratch directory is written to disk.
 
+The owner-executable bit is carried through the archive, so a template's
+scripts and hooks stay runnable. A file whose extension says text but whose
+bytes are not valid UTF-8 is copied verbatim rather than failing the unpack.
+
 ## Commands
 
 ```shell
@@ -200,22 +204,33 @@ Every phase is validated with structured, coded errors. A
 `ValidationResult.throwIfInvalid()` throws a `ValidationException` when any
 error-severity issue is present; warnings never block.
 
-| Phase  | Validator            | Checks                                                                              |
-| ------ | -------------------- | ----------------------------------------------------------------------------------- |
-| pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, non-empty `replaces`          |
-| pack   | `ProjectValidator`   | dir exists, non-empty, each `replaces` token occurs (warns on partial-name overlap) |
-| unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree                            |
-| unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                |
-| unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token             |
-| unpack | `TargetValidator`    | parent exists, destination free, writable                                           |
+| Phase  | Validator            | Checks                                                                                |
+| ------ | -------------------- | ------------------------------------------------------------------------------------- |
+| pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, usable `replaces` tokens        |
+| pack   | `ProjectValidator`   | dir has files to pack, each `replaces` token occurs (warns on partial-name overlap)   |
+| unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree, no entry escapes the target |
+| unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                  |
+| unpack | `TargetValidator`    | parent exists, destination free, writable                                             |
+| unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token               |
 
 Order — pack: `Manifest → Project`; unpack:
-`Archive → Manifest → Variables → Target`. The first failing phase aborts before
+`Archive → Manifest → Target → Variables`. The first failing phase aborts before
 the next runs. The CLI maps a `ValidationException` to exit code `1`.
+
+`ProjectValidator` checks the files the pack will actually capture — the
+`include` / `exclude` globs apply to validation too, so a token that occurs only
+in an excluded file is reported as missing.
+
+Target is validated *before* variables because resolving them may prompt:
+otherwise you would answer every prompt and only then learn the destination was
+occupied. A variable that cannot be resolved is reported as `VARIABLE_MISSING`
+along with all the others, rather than aborting on the first one.
 
 ## Out of scope
 
-- Content-based binary detection (extensions only — no MIME sniffing).
+- Content-based binary detection (extensions only — no MIME sniffing; the
+  UTF-8 fallback above is a decode failure, not classification).
+- File modes beyond the executable bit (no ownership, no full mode round trip).
 - Templating beyond literal substitution (no conditionals/loops/partials).
 - Compression other than gzip, encryption, or signing.
 - Remote template registries / fetching over the network.

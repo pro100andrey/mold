@@ -42,9 +42,16 @@ class TargetValidator extends ValidatorBase<String> {
       ]);
     }
 
-    if (!_canWrite(parent)) {
+    // When the target already exists (empty, so not `occupied`), it is the
+    // directory files get written into — probing the parent would pass on a
+    // read-only target and let writeAsStringSync throw uncaught later.
+    final probeDir = dir.existsSync() ? dir : parent;
+    if (!_canWrite(probeDir)) {
       return ValidationResult([
-        ValidationError(notWritable, 'No write permission for: ${parent.path}'),
+        ValidationError(
+          notWritable,
+          'No write permission for: ${probeDir.path}',
+        ),
       ]);
     }
 

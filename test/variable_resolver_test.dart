@@ -43,16 +43,22 @@ void main() {
       expect(reads, 0);
     });
 
-    test('--no-prompt with a required, default-less variable throws', () {
+    test('--no-prompt omits a required, default-less variable', () {
+      // Omitted rather than thrown on, so VariablesValidator reports every
+      // missing variable at once as a structured VARIABLE_MISSING.
       const resolver = VariableResolver(noPrompt: true);
+      final resolved = resolver.resolve([required, projectName], const {});
+
+      expect(resolved.containsKey('org'), isFalse);
+      expect(resolved['project_name'], 'my_project');
       expect(
-        () => resolver.resolve([required], const {}),
-        throwsA(
-          isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            contains('org'),
-          ),
+        const VariablesValidator().validate(
+          VariablesInput(variables: const [required], values: resolved),
+        ),
+        isA<ValidationResult>().having(
+          (r) => r.errors.map((e) => e.code),
+          'codes',
+          contains(VariablesValidator.missing),
         ),
       );
     });

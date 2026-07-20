@@ -48,12 +48,17 @@ class Unbundler implements UnbundlerBase {
     Map<String, String> vars = const {},
     VariableResolver? resolver,
   }) {
-    // Phase order: archive → manifest → variables → target. The first failing
+    // Phase order: archive → manifest → target → variables. The first failing
     // phase aborts before the next runs.
+    //
+    // Target precedes variables because resolving them may prompt: validating
+    // it afterwards made the user answer every prompt only to be told the
+    // destination was occupied, discarding all the input.
     const ArchiveValidator().validate(bytes).throwIfInvalid();
     final archive = const ArchiveReader().read(bytes);
     final manifest = Manifest.fromYaml(archive.manifestYaml);
     const ManifestValidator().validate(manifest).throwIfInvalid();
+    const TargetValidator().validate(targetDir).throwIfInvalid();
 
     final resolved = (resolver ?? const VariableResolver()).resolve(
       manifest.variables,
@@ -64,7 +69,6 @@ class Unbundler implements UnbundlerBase {
           VariablesInput(variables: manifest.variables, values: resolved),
         )
         .throwIfInvalid();
-    const TargetValidator().validate(targetDir).throwIfInvalid();
 
     _write(archive, manifest, targetDir, resolved);
 
