@@ -50,33 +50,13 @@ class Bundler implements BundlerBase {
       files[rel] = File(p.join(projectDir, rel)).readAsBytesSync();
     }
 
-    final manifestYaml = manifest.source ?? _serialize(manifest);
+    // A manifest read from a file embeds byte-for-byte; one built in code is
+    // rendered by the Manifest itself, which knows all of its fields.
+    final manifestYaml = manifest.source ?? manifest.toYaml();
 
     return const ArchiveWriter().write(
       manifestYaml: manifestYaml,
       files: files,
     );
-  }
-
-  /// Minimal YAML rendering for manifests built in code (no [Manifest.source]).
-  String _serialize(Manifest manifest) {
-    final buffer = StringBuffer()
-      ..writeln('name: ${manifest.name}')
-      ..writeln('version: ${manifest.version}');
-    if (manifest.include.isNotEmpty) {
-      buffer.writeln('include:');
-      for (final g in manifest.include) {
-        buffer.writeln('  - $g');
-      }
-    }
-
-    if (manifest.exclude.isNotEmpty) {
-      buffer.writeln('exclude:');
-      for (final g in manifest.exclude) {
-        buffer.writeln('  - $g');
-      }
-    }
-    
-    return buffer.toString();
   }
 }

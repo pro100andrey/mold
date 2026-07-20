@@ -121,6 +121,78 @@ class Manifest {
   /// into the archive as `mold.yaml`.
   final String? source;
 
+  /// Renders this manifest back to YAML, for embedding a manifest that was
+  /// built in code rather than read from a file (where [source] is null).
+  ///
+  /// Round-trips every field, so a code-built manifest produces a template that
+  /// renames exactly like a file-built one. Emitting only name/version would
+  /// yield an archive that unpacks with no substitution at all.
+  String toYaml() {
+    final buffer = StringBuffer()
+      ..writeln('name: ${_scalar(name)}')
+      ..writeln('version: ${_scalar(version)}');
+
+    _writeList(buffer, 'include', include);
+    _writeList(buffer, 'exclude', exclude);
+
+    if (variables.isNotEmpty) {
+      buffer.writeln('variables:');
+      for (final v in variables) {
+        final defaultValue = v.defaultValue;
+        final replaces = v.replaces;
+        // A variable with no sub-fields still needs an explicit empty mapping:
+        // a bare `name:` parses back as null, not as a mapping.
+        if (v.description.isEmpty && defaultValue == null && replaces == null) {
+          buffer.writeln('  ${_scalar(v.name)}: {}');
+          continue;
+        }
+        buffer.writeln('  ${_scalar(v.name)}:');
+        if (v.description.isNotEmpty) {
+          buffer.writeln('    description: ${_scalar(v.description)}');
+        }
+        if (defaultValue != null) {
+          buffer.writeln('    default: ${_scalar(defaultValue)}');
+        }
+        if (replaces != null) {
+          buffer.writeln('    replaces: ${_scalar(replaces)}');
+        }
+      }
+    }
+
+    if (extraSubstitutions.isNotEmpty) {
+      buffer.writeln('extra_substitutions:');
+      for (final s in extraSubstitutions) {
+        buffer
+          ..writeln('  - from: ${_scalar(s.from)}')
+          ..writeln('    to: ${_scalar(s.to)}');
+      }
+    }
+
+    _writeList(buffer, 'no_substitute', noSubstitute);
+    _writeList(buffer, 'binary_extensions', binaryExtensions);
+
+    return buffer.toString();
+  }
+
+  static void _writeList(StringBuffer buffer, String key, List<String> items) {
+    if (items.isEmpty) {
+      return;
+    }
+    buffer.writeln('$key:');
+    for (final item in items) {
+      buffer.writeln('  - ${_scalar(item)}');
+    }
+  }
+
+  /// Renders [value] as a single-quoted YAML scalar.
+  ///
+  /// Quoting unconditionally rather than only when "needed": glob patterns
+  /// (`**`, `*.g.dart`), values containing `:`, and version-like strings each
+  /// have their own plain-scalar hazard, and a single-quoted scalar with `'`
+  /// doubled is unambiguous for all of them.
+  static String _scalar(String value) =>
+      "'${value.replaceAll("'", "''")}'";
+
   /// Reads an optional scalar as a string; missing → empty. Required-field
   /// enforcement is the `ManifestValidator`'s job, so parsing stays lenient.
   static String _optionalString(Object? value) =>
