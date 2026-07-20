@@ -67,6 +67,19 @@ void main() {
         expect(table['SERVER'], 'CLIENT');
         expect(table['Server'], 'Client');
       });
+
+      test('a collapsed key keeps the snake_case value, not the kebab one', () {
+        // snake == kebab == 'superserver', but the two values differ. First
+        // casing to claim the key wins, so snake_case does.
+        final table = c.replacements('superserver', 'my_project');
+        expect(table['superserver'], 'my_project');
+        expect(table['SUPERSERVER'], 'MY_PROJECT');
+        expect(table['Superserver'], 'MyProject');
+      });
+
+      test('a non-ASCII token yields no replacements at all', () {
+        expect(c.replacements('приложение', 'my_project'), isEmpty);
+      });
     });
   });
 }

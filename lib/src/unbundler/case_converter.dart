@@ -34,14 +34,26 @@ class CaseConverter {
 
   /// Builds the replacement table mapping each of the four casings of [from] to
   /// the matching casing of [to]. Empty keys (degenerate tokens) are dropped.
+  ///
+  /// Casings of [from] can collide — a single-word token like `superserver` is
+  /// its own snake_case *and* kebab-case form. The first casing to claim a key
+  /// keeps it, so such a token resolves to the snake_case value; a map literal
+  /// would instead let the last duplicate key silently overwrite the earlier
+  /// ones, rewriting every `superserver` to the kebab form.
   Map<String, String> replacements(String from, String to) {
-    final table = <String, String>{
-      toSnake(from): toSnake(to),
-      toKebab(from): toKebab(to),
-      toScreamingSnake(from): toScreamingSnake(to),
-      toPascal(from): toPascal(to),
-    }..removeWhere((k, _) => k.isEmpty);
-    
+    final table = <String, String>{};
+
+    void claim(String key, String value) {
+      if (key.isNotEmpty) {
+        table.putIfAbsent(key, () => value);
+      }
+    }
+
+    claim(toSnake(from), toSnake(to));
+    claim(toKebab(from), toKebab(to));
+    claim(toScreamingSnake(from), toScreamingSnake(to));
+    claim(toPascal(from), toPascal(to));
+
     return table;
   }
 

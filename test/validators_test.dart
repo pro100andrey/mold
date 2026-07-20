@@ -64,6 +64,18 @@ void main() {
         );
       });
 
+      test('MANIFEST_UNSUPPORTED_REPLACES', () {
+        // Splits into zero ASCII words, so it would substitute nothing.
+        final m = Manifest.fromYaml(
+          'name: x\nversion: 1\n'
+          'variables:\n  a:\n    replaces: приложение\n',
+        );
+        expect(
+          validator.validate(m),
+          rejectsWith(ManifestValidator.unsupportedReplaces),
+        );
+      });
+
       test('MANIFEST_DUPLICATE_VARIABLE', () {
         // YAML map keys can't duplicate, so build the manifest directly.
         const m = Manifest(

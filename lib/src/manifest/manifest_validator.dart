@@ -1,5 +1,6 @@
 import 'package:glob/glob.dart';
 
+import '../unbundler/case_converter.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
@@ -15,6 +16,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
   static const duplicateVariable = 'MANIFEST_DUPLICATE_VARIABLE';
   static const invalidGlob = 'MANIFEST_INVALID_GLOB';
   static const emptyReplaces = 'MANIFEST_EMPTY_REPLACES';
+  static const unsupportedReplaces = 'MANIFEST_UNSUPPORTED_REPLACES';
 
   @override
   String get phase => 'manifest';
@@ -55,6 +57,18 @@ class ManifestValidator extends ValidatorBase<Manifest> {
       }
       
       final replaces = variable.replaces;
+      if (replaces != null &&
+          replaces.isNotEmpty &&
+          const CaseConverter().splitWords(replaces).isEmpty) {
+        issues.add(
+          ValidationError(
+            unsupportedReplaces,
+            "Variable '${variable.name}': token '$replaces' has no ASCII "
+            'word characters, so it would substitute nothing.',
+            field: variable.name,
+          ),
+        );
+      }
       if (replaces != null && replaces.isEmpty) {
         issues.add(
           ValidationError(
