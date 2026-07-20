@@ -145,13 +145,26 @@ class Unbundler implements UnbundlerBase {
       final verbatim =
           classifier.isBinary(entry.key) ||
           noSubstitute.any((g) => g.matches(entry.key));
-      if (verbatim) {
+      // Extension-based classification calls anything unlisted text, including
+      // extensionless files, so a "text" file can still hold non-UTF-8 bytes.
+      // Falling back to a verbatim copy keeps such a file intact instead of
+      // aborting the unpack partway through; classification stays extension-
+      // based, no content sniffing.
+      final decoded = verbatim ? null : _tryDecodeUtf8(entry.value);
+      if (decoded == null) {
         out.writeAsBytesSync(entry.value);
       } else {
-        out.writeAsStringSync(
-          contentSubstitutor.apply(utf8.decode(entry.value)),
-        );
+        out.writeAsStringSync(contentSubstitutor.apply(decoded));
       }
+    }
+  }
+
+  /// Decodes [bytes] as UTF-8, or returns null when they are not valid UTF-8.
+  String? _tryDecodeUtf8(List<int> bytes) {
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      return null;
     }
   }
 
@@ -169,7 +182,13 @@ class Unbundler implements UnbundlerBase {
         continue;
       }
 
-      table.addAll(converter.replacements(replaces, resolved[variable.name]!));
+      final value = resolved[variable.name];
+      if (value == null) {
+        throw FormatException(
+          "No value was resolved for variable '${variable.name}'.",
+        );
+      }
+      table.addAll(converter.replacements(replaces, value));
     }
     
     return table;
