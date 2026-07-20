@@ -28,6 +28,13 @@ The owner-executable bit is carried through the archive, so a template's
 scripts and hooks stay runnable. A file whose extension says text but whose
 bytes are not valid UTF-8 is copied verbatim rather than failing the unpack.
 
+A symlink pointing at a file **inside** the source dir is packed as its
+content, so the unpacked project needs no symlink privileges (Windows requires
+them) and substitution reaches the content. A symlink pointing outside, at a
+directory, or at nothing is skipped with a `PROJECT_SYMLINK_SKIPPED` warning —
+following one out of the project would let `pack` inline `~/.ssh/id_rsa` into a
+template you then share.
+
 ## Commands
 
 ```shell
@@ -204,14 +211,14 @@ Every phase is validated with structured, coded errors. A
 `ValidationResult.throwIfInvalid()` throws a `ValidationException` when any
 error-severity issue is present; warnings never block.
 
-| Phase  | Validator            | Checks                                                                                |
-| ------ | -------------------- | ------------------------------------------------------------------------------------- |
-| pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, usable `replaces` tokens        |
-| pack   | `ProjectValidator`   | dir has files to pack, each `replaces` token occurs (warns on partial-name overlap)   |
-| unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree, no entry escapes the target |
-| unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                  |
-| unpack | `TargetValidator`    | parent exists, destination free, writable                                             |
-| unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token               |
+| Phase  | Validator            | Checks                                                                                  |
+| ------ | -------------------- | --------------------------------------------------------------------------------------- |
+| pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, usable `replaces` tokens          |
+| pack   | `ProjectValidator`   | dir has files to pack, each `replaces` token occurs; warns on overlap and skipped links |
+| unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree, no entry escapes the target   |
+| unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                    |
+| unpack | `TargetValidator`    | parent exists, destination free, writable                                               |
+| unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token                 |
 
 Order — pack: `Manifest → Project`; unpack:
 `Archive → Manifest → Target → Variables`. The first failing phase aborts before
@@ -231,6 +238,7 @@ along with all the others, rather than aborting on the first one.
 - Content-based binary detection (extensions only — no MIME sniffing; the
   UTF-8 fallback above is a decode failure, not classification).
 - File modes beyond the executable bit (no ownership, no full mode round trip).
+- Preserving symlinks as symlinks (they are dereferenced; see above).
 - Templating beyond literal substitution (no conditionals/loops/partials).
 - Compression other than gzip, encryption, or signing.
 - Remote template registries / fetching over the network.

@@ -30,6 +30,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   static const dirEmpty = 'PROJECT_DIR_EMPTY';
   static const replacesNotFound = 'PROJECT_REPLACES_NOT_FOUND';
   static const partialOverlap = 'PROJECT_PARTIAL_OVERLAP';
+  static const symlinkSkipped = 'PROJECT_SYMLINK_SKIPPED';
 
   @override
   String get phase => 'project';
@@ -49,10 +50,11 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
     // Validate exactly the files the Bundler will pack: same scanner, same
     // include/exclude filters, same symlink handling. Walking the directory
     // directly would validate against files that never reach the archive.
-    final relPaths = FileScanner(
+    final scan = FileScanner(
       include: input.manifest.include,
       exclude: input.manifest.exclude,
     ).scan(input.dir);
+    final relPaths = scan.files;
     if (relPaths.isEmpty) {
       return ValidationResult([
         ValidationError(
@@ -65,6 +67,15 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
 
     final haystack = _haystack(input.dir, input.manifest, relPaths);
     final issues = <ValidationError>[];
+    for (final entry in scan.skippedLinks.entries) {
+      issues.add(
+        ValidationError.warning(
+          symlinkSkipped,
+          "Symlink '${entry.key}' is not packed: ${entry.value}.",
+          field: entry.key,
+        ),
+      );
+    }
     for (final variable in input.manifest.variables) {
       final token = variable.replaces;
       if (token == null || token.isEmpty) {

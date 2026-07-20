@@ -43,7 +43,7 @@ class Bundler implements BundlerBase {
       include: manifest.include,
       exclude: manifest.exclude,
     );
-    final relPaths = scanner.scan(projectDir);
+    final relPaths = scanner.scan(projectDir).files;
 
     final files = <String, List<int>>{};
     final executable = <String>{};
