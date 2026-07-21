@@ -32,6 +32,22 @@ class CaseConverter {
   /// `PascalCase`
   String toPascal(String token) => splitWords(token).map(_capitalize).join();
 
+  /// `camelCase`
+  ///
+  /// Not part of [replacements] — a token's camelCase form is indistinguishable
+  /// from its snake_case form for a single word, so deriving it automatically
+  /// would be ambiguous. It is available as an explicit transform instead.
+  String toCamel(String token) {
+    final words = splitWords(token);
+    if (words.isEmpty) {
+      return '';
+    }
+    return words.first + words.skip(1).map(_capitalize).join();
+  }
+
+  /// `Title Case`
+  String toTitle(String token) => splitWords(token).map(_capitalize).join(' ');
+
   /// Builds the replacement table mapping each of the four casings of [from] to
   /// the matching casing of [to]. Empty keys (degenerate tokens) are dropped.
   ///

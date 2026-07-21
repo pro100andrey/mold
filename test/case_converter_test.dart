@@ -82,4 +82,61 @@ void main() {
       });
     });
   });
+
+  group('CaseTransform', () {
+    test('each transform renders its documented shape', () {
+      expect(CaseTransform.snakeCase.apply('my_project'), 'my_project');
+      expect(CaseTransform.kebabCase.apply('my_project'), 'my-project');
+      expect(CaseTransform.camelCase.apply('my_project'), 'myProject');
+      expect(CaseTransform.pascalCase.apply('my_project'), 'MyProject');
+      expect(CaseTransform.screamingCase.apply('my_project'), 'MY_PROJECT');
+      expect(CaseTransform.titleCase.apply('my_project'), 'My Project');
+    });
+
+    test('accepts any source spelling', () {
+      for (final spelling in [
+        'my_project',
+        'myProject',
+        'MyProject',
+        'MY_PROJECT',
+        'my-project',
+      ]) {
+        expect(CaseTransform.camelCase.apply(spelling), 'myProject');
+        expect(CaseTransform.titleCase.apply(spelling), 'My Project');
+      }
+    });
+
+    test('handles acronym runs the way splitWords does', () {
+      expect(CaseTransform.camelCase.apply('myHTTPServer'), 'myHttpServer');
+      expect(CaseTransform.titleCase.apply('myHTTPServer'), 'My Http Server');
+    });
+
+    test('a degenerate token yields an empty string, not a crash', () {
+      expect(
+        CaseTransform.camelCase.apply(
+          '\u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435',
+        ),
+        '',
+      );
+      expect(CaseTransform.titleCase.apply(''), '');
+    });
+
+    test('byNameOrNull is the lookup, names lists the choices', () {
+      expect(CaseTransform.byNameOrNull('camelCase'), CaseTransform.camelCase);
+      expect(CaseTransform.byNameOrNull('CamelCase'), isNull);
+      expect(CaseTransform.byNameOrNull('nope'), isNull);
+      expect(CaseTransform.names, contains('titleCase'));
+    });
+
+    test('replacements() still derives exactly four casings', () {
+      // camelCase and titleCase are deliberately NOT auto-derived: for a
+      // single-word token camelCase is indistinguishable from snake_case.
+      const c = CaseConverter();
+      expect(c.replacements('my_project', 'your_thing').keys, hasLength(4));
+      expect(
+        c.replacements('my_project', 'your_thing'),
+        isNot(contains('myProject')),
+      );
+    });
+  });
 }
