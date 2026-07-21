@@ -80,11 +80,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
       }
     }
 
-    for (final pattern in [
-      ...input.include,
-      ...input.exclude,
-      ...input.noSubstitute,
-    ]) {
+    for (final pattern in input.globPatterns) {
       try {
         Glob(pattern);
       } on FormatException {

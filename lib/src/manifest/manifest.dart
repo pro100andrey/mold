@@ -27,6 +27,22 @@ class TemplateVariable {
   /// The source token to replace (in all four casings). Null when the variable
   /// only feeds `extra_substitutions`.
   final String? replaces;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TemplateVariable &&
+      other.name == name &&
+      other.description == description &&
+      other.defaultValue == defaultValue &&
+      other.replaces == replaces;
+
+  @override
+  int get hashCode => Object.hash(name, description, defaultValue, replaces);
+
+  @override
+  String toString() =>
+      'TemplateVariable($name, description: $description, '
+      'default: $defaultValue, replaces: $replaces)';
 }
 
 /// A literal text replacement applied to file contents at unpack time, for
@@ -39,6 +55,32 @@ class Substitution {
 
   /// The literal replacement.
   final String to;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Substitution && other.from == from && other.to == to;
+
+  @override
+  int get hashCode => Object.hash(from, to);
+
+  @override
+  String toString() => 'Substitution($from -> $to)';
+}
+
+/// Whether [a] and [b] hold equal elements in the same order.
+///
+/// Local rather than `package:collection`'s `ListEquality`, to keep the
+/// dependency list at five for one function.
+bool _listEquals<T>(List<T> a, List<T> b) {
+  if (a.length != b.length) {
+    return false;
+  }
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// The template manifest (`mold.yaml`).
@@ -120,6 +162,53 @@ class Manifest {
   /// The verbatim YAML this manifest was parsed from, when available. Embedded
   /// into the archive as `mold.yaml`.
   final String? source;
+
+  /// Every glob pattern this manifest declares, in one place.
+  ///
+  /// The single point of truth for `ManifestValidator`'s glob check. A new
+  /// glob-bearing field is added **here**, next to its declaration, rather than
+  /// to a list buried in a validator that nothing points at.
+  List<String> get globPatterns => [...include, ...exclude, ...noSubstitute];
+
+  /// Equality over the declared content, so a round trip through [toYaml] can
+  /// be asserted in one expression and a field forgotten there fails loudly.
+  ///
+  /// [source] is deliberately excluded: it records where the manifest came
+  /// from, not what it means, and including it would make
+  /// `Manifest.fromYaml(m.toYaml()) == m` impossible — `fromYaml` always sets
+  /// it, a manifest built in code never has one.
+  @override
+  bool operator ==(Object other) =>
+      other is Manifest &&
+      other.name == name &&
+      other.version == version &&
+      _listEquals(other.include, include) &&
+      _listEquals(other.exclude, exclude) &&
+      _listEquals(other.variables, variables) &&
+      _listEquals(other.extraSubstitutions, extraSubstitutions) &&
+      _listEquals(other.noSubstitute, noSubstitute) &&
+      _listEquals(other.binaryExtensions, binaryExtensions);
+
+  @override
+  int get hashCode => Object.hash(
+    name,
+    version,
+    Object.hashAll(include),
+    Object.hashAll(exclude),
+    Object.hashAll(variables),
+    Object.hashAll(extraSubstitutions),
+    Object.hashAll(noSubstitute),
+    Object.hashAll(binaryExtensions),
+  );
+
+  /// Field-by-field, so a failed round-trip assertion names the field that
+  /// differs instead of printing two opaque instances.
+  @override
+  String toString() =>
+      'Manifest(name: $name, version: $version, include: $include, '
+      'exclude: $exclude, variables: $variables, '
+      'extraSubstitutions: $extraSubstitutions, '
+      'noSubstitute: $noSubstitute, binaryExtensions: $binaryExtensions)';
 
   /// Renders this manifest back to YAML, for embedding a manifest that was
   /// built in code rather than read from a file (where [source] is null).

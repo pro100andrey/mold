@@ -3,6 +3,13 @@ import 'dart:io';
 import 'package:mold/mold.dart';
 import 'package:test/test.dart';
 
+/// Asserts [key] is absent as a top-level YAML key.
+///
+/// Anchored, because a plain `contains('substitutions:')` also matches
+/// `extra_substitutions:` — the kind of false pass that hides a missing field.
+Matcher hasNoTopLevelKey(String key) =>
+    isNot(matches(RegExp('^$key:', multiLine: true)));
+
 void main() {
   group('Manifest.toYaml', () {
     test('round-trips every field', () {
@@ -27,24 +34,9 @@ void main() {
         binaryExtensions: ['myblob'],
       );
 
-      final parsed = Manifest.fromYaml(original.toYaml());
-
-      expect(parsed.name, original.name);
-      expect(parsed.version, original.version);
-      expect(parsed.include, original.include);
-      expect(parsed.exclude, original.exclude);
-      expect(parsed.noSubstitute, original.noSubstitute);
-      expect(parsed.binaryExtensions, original.binaryExtensions);
-      expect(parsed.variables, hasLength(2));
-      expect(parsed.variables.first.name, 'project_name');
-      expect(parsed.variables.first.description, 'The new project name');
-      expect(parsed.variables.first.defaultValue, 'my_project');
-      expect(parsed.variables.first.replaces, 'super_server');
-      expect(parsed.variables[1].name, 'bare');
-      expect(parsed.variables[1].replaces, isNull);
-      expect(parsed.extraSubstitutions, hasLength(1));
-      expect(parsed.extraSubstitutions.first.from, 'https://api.super.dev');
-      expect(parsed.extraSubstitutions.first.to, 'https://x.example');
+      // One assertion over the whole value, so a field added to Manifest but
+      // forgotten in toYaml() fails here instead of passing silently.
+      expect(Manifest.fromYaml(original.toYaml()), equals(original));
     });
 
     test('survives scalars that would break a plain YAML scalar', () {
@@ -94,9 +86,12 @@ void main() {
       const minimal = Manifest(name: 'x', version: '1');
       final yaml = minimal.toYaml();
 
-      expect(yaml, isNot(contains('include:')));
-      expect(yaml, isNot(contains('variables:')));
-      expect(yaml, isNot(contains('extra_substitutions:')));
+      expect(yaml, hasNoTopLevelKey('include'));
+      expect(yaml, hasNoTopLevelKey('exclude'));
+      expect(yaml, hasNoTopLevelKey('variables'));
+      expect(yaml, hasNoTopLevelKey('extra_substitutions'));
+      expect(yaml, hasNoTopLevelKey('no_substitute'));
+      expect(yaml, hasNoTopLevelKey('binary_extensions'));
     });
   });
 

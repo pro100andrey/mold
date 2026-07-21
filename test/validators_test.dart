@@ -92,18 +92,19 @@ void main() {
         );
       });
 
-      test('MANIFEST_INVALID_GLOB', () {
-        final m = Manifest.fromYaml('''
-name: x
-version: 1
-include:
-  - "a["
-''');
-        expect(
-          validator.validate(m),
-          rejectsWith(ManifestValidator.invalidGlob),
-        );
-      });
+      // Every glob-bearing field, not just include: the check reads
+      // Manifest.globPatterns, and a field missing from it fails silently.
+      for (final field in ['include', 'exclude', 'no_substitute']) {
+        test('MANIFEST_INVALID_GLOB in $field', () {
+          final m = Manifest.fromYaml(
+            'name: x\nversion: 1\n$field:\n  - "a["\n',
+          );
+          expect(
+            validator.validate(m),
+            rejectsWith(ManifestValidator.invalidGlob),
+          );
+        });
+      }
 
       test('MANIFEST_EMPTY_REPLACES', () {
         final m = Manifest.fromYaml('''
