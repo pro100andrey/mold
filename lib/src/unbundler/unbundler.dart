@@ -121,7 +121,7 @@ class Unbundler implements UnbundlerBase {
   /// the input.
   (BundleArchive, Manifest, Map<String, String>) _prepare(
     List<int> bytes,
-    String targetDir,
+    String? targetDir,
     Map<String, String> vars,
     VariableResolver? resolver,
   ) {
@@ -129,7 +129,12 @@ class Unbundler implements UnbundlerBase {
     final archive = const ArchiveReader().read(bytes);
     final manifest = Manifest.fromYaml(archive.manifestYaml);
     const ManifestValidator().validate(manifest).throwIfInvalid();
-    const TargetValidator().validate(targetDir).throwIfInvalid();
+    // A null target means "no destination in mind" — previewing the
+    // substitutions of a template that has not been distributed yet. Every
+    // other phase still runs.
+    if (targetDir != null) {
+      const TargetValidator().validate(targetDir).throwIfInvalid();
+    }
 
     final resolved = (resolver ?? const VariableResolver()).resolve(
       manifest.variables,
@@ -219,11 +224,15 @@ class Unbundler implements UnbundlerBase {
   ///
   /// Runs the same validation and variable resolution as [unbundle] and
   /// applies the same [_Rules], so a preview cannot disagree with the real
-  /// unpack — it is that computation minus the writes. [targetDir] is
-  /// validated too, so a dry run also tells you the destination is usable.
+  /// unpack — it is that computation minus the writes.
+  ///
+  /// [targetDir] is validated when given, so a dry run also tells you the
+  /// destination is usable. Pass null to preview the substitutions alone, with
+  /// no destination in mind — what `mold pack --diff` does for a template that
+  /// has not been distributed yet.
   UnpackPlan plan({
     required List<int> bytes,
-    required String targetDir,
+    String? targetDir,
     Map<String, String> vars = const {},
     VariableResolver? resolver,
   }) {

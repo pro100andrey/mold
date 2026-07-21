@@ -312,6 +312,66 @@ variables:
       expect(File(out).existsSync(), isFalse);
     });
 
+    test('pack --diff previews the renames without writing', () async {
+      File(p.join(project.path, 'mold.yaml')).writeAsStringSync('''
+name: super_server
+version: 1.0.0
+variables:
+  project_name:
+    default: my_project
+    replaces: super_server
+''');
+      File(
+        p.join(project.path, 'main.dart'),
+      ).writeAsStringSync('// super_server\n');
+
+      final out = p.join(tmp.path, 'never.mold');
+      final err = _Sink();
+      final code = await runBundleCli([
+        'pack',
+        project.path,
+        '-o',
+        out,
+        '--diff',
+        '--var',
+        'project_name=tempo',
+      ], err: err);
+
+      expect(code, 0);
+      expect(err.text, contains('Preview'));
+      // The point of the flag: the substitutions are visible at pack time,
+      // without distributing the template first.
+      expect(err.text, contains('-// super_server'));
+      expect(err.text, contains('+// tempo'));
+      expect(File(out).existsSync(), isFalse);
+    });
+
+    test('pack --diff falls back to manifest defaults', () async {
+      File(p.join(project.path, 'mold.yaml')).writeAsStringSync('''
+name: super_server
+version: 1.0.0
+variables:
+  project_name:
+    default: my_project
+    replaces: super_server
+''');
+      File(
+        p.join(project.path, 'main.dart'),
+      ).writeAsStringSync('// super_server\n');
+
+      final err = _Sink();
+      final code = await runBundleCli([
+        'pack',
+        project.path,
+        '-o',
+        p.join(tmp.path, 'never.mold'),
+        '--diff',
+      ], err: err);
+
+      expect(code, 0);
+      expect(err.text, contains('+// my_project'));
+    });
+
     test('unpack with a malformed --var errors with code 64', () async {
       final archive = p.join(tmp.path, 'out.mold');
       writeManifest();

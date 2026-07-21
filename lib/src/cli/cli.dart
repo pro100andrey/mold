@@ -89,10 +89,22 @@ class PackCommand extends Command<int> {
         defaultsTo: OutputFormat.tarGz.flag,
         help: 'Output format: tar.gz file, or an embeddable Dart source.',
       )
+      ..addMultiOption(
+        'var',
+        abbr: 'v',
+        help: 'Variable value as key=value, for previewing with --diff.',
+      )
       ..addFlag(
         'dry-run',
         negatable: false,
         help: 'Validate and list what would be captured, without writing.',
+      )
+      ..addFlag(
+        'diff',
+        negatable: false,
+        help:
+            'Preview the renames this manifest would make '
+            '(implies --dry-run).',
       );
   }
 
@@ -121,6 +133,13 @@ class PackCommand extends Command<int> {
       final manifest = Manifest.fromFile(manifestPath);
       final format = OutputFormat.fromFlag(results['format'] as String);
 
+      if (results['diff'] as bool) {
+        return _previewPack(
+          sourceDir,
+          manifest,
+          _parseVars(results['var'] as List<String>),
+        );
+      }
       if (results['dry-run'] as bool) {
         return _dryRunPack(sourceDir, manifest);
       }
@@ -189,6 +208,38 @@ class PackCommand extends Command<int> {
     for (final rel in scan.files) {
       _err.writeln('  $rel');
     }
+
+    return 0;
+  }
+
+  /// Previews the renames this manifest would make, without writing anything.
+  ///
+  /// Packing itself substitutes nothing, so there is no diff in the pack step
+  /// — but the question a template author actually has is "are my rules
+  /// right", and answering it should not require distributing the template
+  /// first. The archive is built in memory and handed straight to the same
+  /// planner `unpack --diff` uses, with no destination.
+  ///
+  /// Values come from `--var` and manifest defaults only; `pack` never
+  /// prompts, so it stays usable from CI.
+  Future<int> _previewPack(
+    String sourceDir,
+    Manifest manifest,
+    Map<String, String> vars,
+  ) async {
+    final archive = await const Bundler().bundle(
+      projectDir: sourceDir,
+      manifest: manifest,
+      onWarning: (message) => _err.writeln('Warning: $message'),
+    );
+    final plan = const Unbundler().plan(
+      bytes: archive,
+      vars: vars,
+      resolver: const VariableResolver(noPrompt: true),
+    );
+
+    _err.writeln('Preview — nothing written.');
+    _printPlan(_err, plan, null, showDiff: true);
 
     return 0;
   }
@@ -292,6 +343,7 @@ class UnpackCommand extends Command<int> {
           throw FormatException('Archive not found: $source');
         }
         _printPlan(
+          _err,
           const Unbundler().plan(
             bytes: file.readAsBytesSync(),
             targetDir: targetDir,
@@ -325,78 +377,85 @@ class UnpackCommand extends Command<int> {
     }
   }
 
-  /// Prints what an unpack would do: a summary, the renames, the per-file
-  /// replacement counts, and optionally a unified diff of each change.
-  ///
-  /// Files nothing happens to are counted but not listed — a template is
-  /// mostly unchanged files, and listing them buries the ones that matter.
-  void _printPlan(UnpackPlan plan, String targetDir, {required bool showDiff}) {
-    final renamed = plan.renamed.toList();
-    final rewritten = plan.rewritten.toList();
+}
 
-    _err
-      ..writeln('Dry run — nothing written to $targetDir.')
-      ..writeln(
-        '  ${plan.files.length} files: ${renamed.length} renamed, '
-        '${rewritten.length} rewritten (${plan.totalReplacements} '
-        'replacements), ${plan.untouched.length} unchanged.',
-      );
+/// Prints what an unpack would do: a summary, the renames, the per-file
+/// replacement counts, and optionally a unified diff of each change.
+///
+/// Files nothing happens to are counted but not listed — a template is
+/// mostly unchanged files, and listing them buries the ones that matter.
+void _printPlan(
+  StringSink err,
+  UnpackPlan plan,
+  String? targetDir, {
+  required bool showDiff,
+}) {
+  final renamed = plan.renamed.toList();
+  final rewritten = plan.rewritten.toList();
 
-    if (renamed.isNotEmpty) {
-      _err.writeln('\nRenamed:');
-      for (final f in renamed) {
-        final count = f.replacements > 0 ? '  (${f.replacements})' : '';
-        _err.writeln('  ${f.from}  ->  ${f.to}$count');
-      }
-    }
+  if (targetDir != null) {
+    err.writeln('Dry run — nothing written to $targetDir.');
+  }
+  err.writeln(
+    '  ${plan.files.length} files: ${renamed.length} renamed, '
+    '${rewritten.length} rewritten (${plan.totalReplacements} '
+    'replacements), ${plan.untouched.length} unchanged.',
+  );
 
-    final contentOnly = rewritten.where((f) => !f.renamed).toList();
-    if (contentOnly.isNotEmpty) {
-      _err.writeln('\nRewritten:');
-      for (final f in contentOnly) {
-        _err.writeln('  ${f.to}  (${f.replacements})');
-      }
-    }
-
-    if (!showDiff) {
-      if (rewritten.isNotEmpty) {
-        _err.writeln('\nRe-run with --diff to see the content changes.');
-      }
-      return;
-    }
-
-    const differ = UnifiedDiff();
-    for (final f in rewritten) {
-      final before = f.before;
-      final after = f.after;
-      if (before == null || after == null) {
-        continue;
-      }
-      final rendered = differ.render(
-        before: before,
-        after: after,
-        fromLabel: f.from,
-        toLabel: f.to,
-      );
-      if (rendered.isNotEmpty) {
-        _err
-          ..writeln()
-          ..write(rendered);
-      }
+  if (renamed.isNotEmpty) {
+    err.writeln('\nRenamed:');
+    for (final f in renamed) {
+      final count = f.replacements > 0 ? '  (${f.replacements})' : '';
+      err.writeln('  ${f.from}  ->  ${f.to}$count');
     }
   }
 
-  /// Parses repeated `key=value` pairs into a map. Splits on the first `=`.
-  Map<String, String> _parseVars(List<String> raw) {
-    final out = <String, String>{};
-    for (final entry in raw) {
-      final eq = entry.indexOf('=');
-      if (eq <= 0) {
-        throw CliException("Invalid --var '$entry'; expected key=value.");
-      }
-      out[entry.substring(0, eq)] = entry.substring(eq + 1);
+  final contentOnly = rewritten.where((f) => !f.renamed).toList();
+  if (contentOnly.isNotEmpty) {
+    err.writeln('\nRewritten:');
+    for (final f in contentOnly) {
+      err.writeln('  ${f.to}  (${f.replacements})');
     }
-
-    return out;
   }
+
+  if (!showDiff) {
+    if (rewritten.isNotEmpty) {
+      err.writeln('\nRe-run with --diff to see the content changes.');
+    }
+    return;
+  }
+
+  const differ = UnifiedDiff();
+  for (final f in rewritten) {
+    final before = f.before;
+    final after = f.after;
+    if (before == null || after == null) {
+      continue;
+    }
+    final rendered = differ.render(
+      before: before,
+      after: after,
+      fromLabel: f.from,
+      toLabel: f.to,
+    );
+    if (rendered.isNotEmpty) {
+      err
+        ..writeln()
+        ..write(rendered);
+    }
+  }
+}
+
+/// Parses repeated `key=value` pairs into a map. Splits on the first `=`.
+Map<String, String> _parseVars(List<String> raw) {
+  final out = <String, String>{};
+  for (final entry in raw) {
+    final eq = entry.indexOf('=');
+    if (eq <= 0) {
+      throw CliException("Invalid --var '$entry'; expected key=value.");
+    }
+    out[entry.substring(0, eq)] = entry.substring(eq + 1);
+  }
+
+  return out;
 }

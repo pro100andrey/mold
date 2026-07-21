@@ -115,7 +115,9 @@ mold pack <source_dir> [options]
                                               ./<name>.dart for embed formats)
   --name,     -n   Output file name stem      (also names the embedded const)
   --format,   -f   tar.gz | bytes | base64    (default: tar.gz)
+  --var,      -v   key=value                  (repeatable, for --diff)
   --dry-run        Validate and list what would be captured, without writing
+  --diff           Preview the renames this manifest would make
 
 mold unpack <source> [options]
   --target,   -t   Destination dir            (default: ./<source-stem>)
@@ -385,14 +387,34 @@ real unpack, so it cannot disagree with one; it is that computation minus the
 writes. The target is validated too, so a dry run also answers "is the
 destination usable".
 
-`mold pack --dry-run` is a **preflight**, not a preview: packing substitutes
-nothing, so there is nothing to diff. It reports which files would be captured,
-how many each filter removed, and the token verdict.
+`mold pack --dry-run` is a **preflight**: which files would be captured, how
+many each filter removed, and the token verdict.
 
 ```text
 Dry run — nothing written. 129 files would be captured, 36 gitignored,
 0 symlinks skipped.
 ```
+
+`mold pack --diff` answers the other question a template author has — *are my
+rules right?* — without packing, distributing and unpacking first:
+
+```sh
+mold pack ./super_server --diff --var project_name=tempo
+```
+
+```text
+Preview — nothing written.
+  129 files: 1 renamed, 18 rewritten (50 replacements), 111 unchanged.
+...
+--- linux/runner/my_application.cc
++++ linux/runner/my_application.cc
+-    gtk_window_set_title(window, "app");
++    gtk_window_set_title(window, "tempo");
+```
+
+The archive is built in memory and handed to the same planner `unpack --diff`
+uses, so the two cannot disagree. Values come from `--var` and manifest
+defaults only — `pack` never prompts, so it stays usable from CI.
 
 ---
 
