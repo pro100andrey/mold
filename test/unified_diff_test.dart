@@ -103,4 +103,96 @@ void main() {
       expect(out, contains('+++ lib/my_project.dart'));
     });
   });
+
+  group('UnifiedDiff hunk headers', () {
+    test('adding to an empty file gives -0,0, as git writes it', () {
+      // `-1,0` claims a hunk starts at line 1 while covering no lines;
+      // `git apply` and `patch` reject or misplace that.
+      final out = diff.render(
+        before: '',
+        after: 'a\nb\n',
+        fromLabel: 'f',
+        toLabel: 'f',
+      );
+
+      expect(out, contains('@@ -0,0 '));
+      expect(out, isNot(contains('@@ -1,0 ')));
+    });
+
+    test('a trailing newline is a terminator, not a phantom line', () {
+      final out = diff.render(
+        before: 'a\nb\n',
+        after: 'a\nB\n',
+        fromLabel: 'f',
+        toLabel: 'f',
+      );
+
+      // Two content lines in, two out — no stray blank context row.
+      expect(out, contains('@@ -1,2 +1,2 @@'));
+      expect(out.split('\n').where((l) => l == ' '), isEmpty);
+    });
+
+    test('a file with no trailing newline keeps its last line', () {
+      final out = diff.render(
+        before: 'a\nb',
+        after: 'a\nB',
+        fromLabel: 'f',
+        toLabel: 'f',
+      );
+
+      expect(out, contains('-b'));
+      expect(out, contains('+B'));
+    });
+
+    test('an empty new range is +0,0', () {
+      final out = diff.render(
+        before: 'a\nb\n',
+        after: '',
+        fromLabel: 'f',
+        toLabel: 'f',
+      );
+
+      expect(out, contains(' +0,0 @@'));
+    });
+
+    test('a non-empty range keeps its 1-based start', () {
+      final out = diff.render(
+        before: 'a\nb\nc\n',
+        after: 'a\nB\nc\n',
+        fromLabel: 'f',
+        toLabel: 'f',
+      );
+
+      expect(out, matches(RegExp(r'@@ -1,\d+ \+1,\d+ @@')));
+    });
+
+    test('a large rewrite stays within the window bound', () {
+      // Exercises the flat Int32List table at the full maxWindow.
+      final before = List.generate(2000, (i) => 'old $i').join('\n');
+      final after = List.generate(2000, (i) => 'new $i').join('\n');
+
+      final out = diff.render(
+        before: before,
+        after: after,
+        fromLabel: 'f',
+        toLabel: 'f',
+      );
+
+      expect(out, contains('-old 0'));
+      expect(out, contains('+new 1999'));
+    });
+
+    test('beyond the window it degrades to a block replace', () {
+      const tiny = UnifiedDiff(maxWindow: 3);
+      final out = tiny.render(
+        before: 'a\nb\nc\nd\ne\n',
+        after: 'v\nw\nx\ny\nz\n',
+        fromLabel: 'f',
+        toLabel: 'f',
+      );
+
+      expect(out, contains('-a'));
+      expect(out, contains('+z'));
+    });
+  });
 }

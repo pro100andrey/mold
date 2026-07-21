@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:typed_data';
 
 /// Renders a unified diff between two versions of a text file.
 ///
@@ -15,9 +16,14 @@ class UnifiedDiff {
   ///
   /// Substitution usually rewrites a handful of lines, so trimming the common
   /// prefix and suffix leaves a tiny window. When it does not — a generated
-  /// file rewritten end to end — falling back to a plain
-  /// remove-everything/add-everything block keeps memory bounded instead of
-  /// allocating an n×m table.
+  /// file rewritten end to end — the diff degrades to a plain
+  /// remove-everything/add-everything block rather than growing without
+  /// bound.
+  ///
+  /// The table is a flat [Int32List] — one allocation of 4 bytes per cell
+  /// rather than n separate lists. Measured in isolation at this window: 16 MB
+  /// for `List<List<int>>` against nothing detectable for the typed array.
+  /// Modest, but it makes the bound an actual bound.
   final int maxWindow;
 
   /// The diff of [before] to [after], or an empty string when they are equal.
@@ -34,8 +40,8 @@ class UnifiedDiff {
       return '';
     }
 
-    final a = before.split('\n');
-    final b = after.split('\n');
+    final a = _lines(before);
+    final b = _lines(after);
     final edits = _diff(a, b);
     final hunks = _hunks(edits);
     if (hunks.isEmpty) {
@@ -52,6 +58,24 @@ class UnifiedDiff {
       }
     }
     return out.toString();
+  }
+
+  /// Splits [text] into lines, treating a trailing newline as a *terminator*
+  /// rather than a separator.
+  ///
+  /// A plain `split('\n')` on the usual newline-terminated file yields a
+  /// phantom empty last element, which every hunk touching the end of a file
+  /// then renders as a stray blank context row.
+  static List<String> _lines(String text) {
+    if (text.isEmpty) {
+      return const [];
+    }
+    final lines = text.split('\n');
+    if (lines.last.isEmpty) {
+      lines.removeLast();
+    }
+
+    return lines;
   }
 
   /// Line-level edit script, common prefix and suffix trimmed first.
@@ -94,17 +118,15 @@ class UnifiedDiff {
       ];
     }
 
-    // Classic LCS table over the trimmed window.
-    final lcs = List.generate(
-      a.length + 1,
-      (_) => List.filled(b.length + 1, 0),
-      growable: false,
-    );
+    // Classic LCS table over the trimmed window, flat and typed.
+    final width = b.length + 1;
+    final lcs = Int32List((a.length + 1) * width);
+    int at(int i, int j) => lcs[i * width + j];
     for (var i = a.length - 1; i >= 0; i--) {
       for (var j = b.length - 1; j >= 0; j--) {
-        lcs[i][j] = a[i] == b[j]
-            ? lcs[i + 1][j + 1] + 1
-            : max(lcs[i + 1][j], lcs[i][j + 1]);
+        lcs[i * width + j] = a[i] == b[j]
+            ? at(i + 1, j + 1) + 1
+            : max(at(i + 1, j), at(i, j + 1));
       }
     }
 
@@ -116,7 +138,7 @@ class UnifiedDiff {
         edits.add(_Edit(_Op.keep, a[i]));
         i++;
         j++;
-      } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      } else if (at(i + 1, j) >= at(i, j + 1)) {
         edits.add(_Edit(_Op.remove, a[i]));
         i++;
       } else {
@@ -176,10 +198,13 @@ class UnifiedDiff {
     final oldCount = slice.where((e) => e.op != _Op.add).length;
     final newCount = slice.where((e) => e.op != _Op.remove).length;
 
-    return _Hunk(
-      '@@ -$oldStart,$oldCount +$newStart,$newCount @@',
-      slice,
-    );
+    // An empty range is `-0,0` in unified diff, not `-1,0`; `git apply` and
+    // `patch` reject or misplace a hunk that claims to start at line 1 while
+    // covering no lines.
+    final oldAt = oldCount == 0 ? 0 : oldStart;
+    final newAt = newCount == 0 ? 0 : newStart;
+
+    return _Hunk('@@ -$oldAt,$oldCount +$newAt,$newCount @@', slice);
   }
 }
 
