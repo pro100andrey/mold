@@ -4,7 +4,6 @@ description: >-
   manifest-driven renaming. Ships its own `mold` CLI (`pack` / `unpack`) and is
   consumable as a library.
 version: 0.1.0
-publish_to: none
 repository: https://github.com/pro100andrey/mold
 issue_tracker: https://github.com/pro100andrey/mold/issues
 

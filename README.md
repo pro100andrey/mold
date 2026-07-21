@@ -21,9 +21,58 @@ mold unpack ./super_server.mold --var project_name=my_project
 
 ---
 
+## Install
+
+### As a CLI
+
+```sh
+dart install mold
+```
+
+That puts `mold` on your `PATH`. To pin a version, or to install before the
+package is on pub.dev:
+
+```sh
+dart install mold@^0.1.0
+
+# straight from git
+dart install 'mold@{git: {url: https://github.com/pro100andrey/mold}}'
+
+# from a local checkout
+dart install 'mold@{path: /path/to/mold}'
+```
+
+On Dart SDKs older than the `dart install` command, use the classic form:
+
+```sh
+dart pub global activate mold
+```
+
+Check it: `mold --help`. If the command is not found, add pub's bin directory
+to your `PATH` — `~/.pub-cache/bin` on macOS and Linux,
+`%LOCALAPPDATA%\Pub\Cache\bin` on Windows.
+
+### As a library
+
+```sh
+dart pub add mold
+```
+
+```dart
+import 'package:mold/mold.dart';
+```
+
+### Requirements
+
+Dart SDK **3.12.2 or newer**. No other runtime dependencies — `mold` shells out
+to `chmod` on POSIX to restore executable bits, and does nothing at all if that
+is unavailable.
+
+---
+
 ## Contents
 
-- [Quick start](#quick-start) · [Commands](#commands)
+- [Install](#install) · [Quick start](#quick-start) · [Commands](#commands)
 - [The manifest](#the-manifest-moldyaml) — [file selection](#file-selection) · [variables](#variables) · [substitutions](#substitutions) · [path renames](#path-renames) · [verbatim files](#verbatim-files)
 - [Interpolation and transforms](#interpolation-and-transforms)
 - [Choosing a `replaces` token](#choosing-a-replaces-token)
