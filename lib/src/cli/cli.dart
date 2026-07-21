@@ -133,11 +133,17 @@ class PackCommand extends Command<int> {
       final manifest = Manifest.fromFile(manifestPath);
       final format = OutputFormat.fromFlag(results['format'] as String);
 
+      final packVars = _parseVars(results['var'] as List<String>);
       if (results['diff'] as bool) {
-        return _previewPack(
-          sourceDir,
-          manifest,
-          _parseVars(results['var'] as List<String>),
+        return _previewPack(sourceDir, manifest, packVars);
+      }
+      if (packVars.isNotEmpty) {
+        // Packing substitutes nothing, so a value passed here can only be for
+        // the preview. Silently dropping it would leave the user believing it
+        // took effect.
+        throw const CliException(
+          '--var only affects `pack --diff`; packing performs no '
+          'substitution. Drop it, or add --diff to preview.',
         );
       }
       if (results['dry-run'] as bool) {
@@ -349,6 +355,8 @@ class UnpackCommand extends Command<int> {
             targetDir: targetDir,
             vars: vars,
             resolver: resolver,
+            // A summary needs counts, not content.
+            withContent: showDiff,
           ),
           targetDir,
           showDiff: showDiff,

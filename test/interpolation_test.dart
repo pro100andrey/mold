@@ -208,4 +208,55 @@ extra_substitutions:
       expect(read(out, 'a.txt').trim(), 'OLD_AGAIN');
     });
   });
+
+  group('plan content', () {
+    late Directory tmp;
+    late Directory src;
+
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('mold_plan_');
+      src = Directory('${tmp.path}/src')..createSync(recursive: true);
+      File('${src.path}/a.txt').writeAsStringSync('super_server');
+    });
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    Future<List<int>> archive() => const Bundler().bundle(
+      projectDir: src.path,
+      manifest: Manifest.fromYaml('''
+name: t
+version: 1
+variables:
+  p:
+    default: my_project
+    replaces: super_server
+'''),
+    );
+
+    test(
+      'withContent: false reports counts without holding the text',
+      () async {
+        final plan = const Unbundler().plan(
+          bytes: await archive(),
+          vars: const {'p': 'my_project'},
+          withContent: false,
+        );
+
+        final file = plan.files.single;
+        expect(file.replacements, 1, reason: 'the count is still exact');
+        expect(file.before, isNull);
+        expect(file.after, isNull);
+      },
+    );
+
+    test('withContent defaults to true, for --diff', () async {
+      final plan = const Unbundler().plan(
+        bytes: await archive(),
+        vars: const {'p': 'my_project'},
+      );
+
+      final file = plan.files.single;
+      expect(file.before, 'super_server');
+      expect(file.after, 'my_project');
+    });
+  });
 }

@@ -372,6 +372,23 @@ variables:
       expect(err.text, contains('+// my_project'));
     });
 
+    test('pack --var without --diff is refused, not ignored', () async {
+      writeManifest();
+      final err = _Sink();
+
+      final code = await runBundleCli([
+        'pack',
+        project.path,
+        '-o',
+        p.join(tmp.path, 'out.mold'),
+        '--var',
+        'project_name=tempo',
+      ], err: err);
+
+      expect(code, 64);
+      expect(err.text, contains('--diff'));
+    });
+
     test('unpack with a malformed --var errors with code 64', () async {
       final archive = p.join(tmp.path, 'out.mold');
       writeManifest();

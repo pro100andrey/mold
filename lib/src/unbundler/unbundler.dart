@@ -235,6 +235,7 @@ class Unbundler implements UnbundlerBase {
     String? targetDir,
     Map<String, String> vars = const {},
     VariableResolver? resolver,
+    bool withContent = true,
   }) {
     final (archive, manifest, resolved) = _prepare(
       bytes,
@@ -246,11 +247,16 @@ class Unbundler implements UnbundlerBase {
 
     return UnpackPlan([
       for (final entry in archive.files.entries)
-        _planOne(rules, entry.key, entry.value),
+        _planOne(rules, entry.key, entry.value, withContent: withContent),
     ]);
   }
 
-  PlannedFile _planOne(_Rules rules, String key, List<int> bytes) {
+  PlannedFile _planOne(
+    _Rules rules,
+    String key,
+    List<int> bytes, {
+    required bool withContent,
+  }) {
     final to = rules.rename(key);
     final before = rules.decodeForSubstitution(key, bytes);
     if (before == null) {
@@ -262,14 +268,16 @@ class Unbundler implements UnbundlerBase {
       );
     }
 
-    final after = rules.substitute(before);
     return PlannedFile(
       from: key,
       to: to,
       verbatim: false,
       replacements: rules.countSubstitutions(before),
-      before: before,
-      after: after,
+      // Only materialized when a caller will render it. A summary needs the
+      // count alone, and holding both sides of every text file to print one
+      // is two extra copies of the whole corpus.
+      before: withContent ? before : null,
+      after: withContent ? rules.substitute(before) : null,
     );
   }
 }
@@ -280,9 +288,14 @@ class Unbundler implements UnbundlerBase {
 /// Both the writer and `Unbundler.plan` go through this, so a dry run and a
 /// real unpack cannot decide differently about any file.
 class _Rules {
-  _Rules(this.manifest, Map<String, String> resolved)
-    : _pathSubstitutor = Substitutor({
-        ..._buildTable(manifest, resolved),
+  factory _Rules(Manifest manifest, Map<String, String> resolved) {
+    // Built once and shared: an initializer list cannot hold a local, so the
+    // two substitutors used to derive every variable's casings separately.
+    final renames = _buildTable(manifest, resolved);
+
+    return _Rules._(
+      pathSubstitutor: Substitutor({
+        ...renames,
         ..._render(manifest.pathRenames, resolved),
       }),
       // Templates are rendered *before* the table is built, so the result
@@ -295,22 +308,33 @@ class _Rules {
       // A rendered value is emitted verbatim and never re-scanned, and an
       // explicit substitution whose `from` equals a derived rename key wins,
       // because the spread puts it last.
-      _contentSubstitutor = Substitutor({
-        ..._buildTable(manifest, resolved),
+      contentSubstitutor: Substitutor({
+        ...renames,
         ..._render(manifest.extraSubstitutions, resolved),
       }),
-      _classifier = FileClassifier(
+      classifier: FileClassifier(
         extraBinary: manifest.binaryExtensions.toSet(),
       ),
-      _noSubstitute = manifest.noSubstitute.map(Glob.new).toList();
+      noSubstitute: manifest.noSubstitute.map(Glob.new).toList(),
+    );
+  }
 
-  /// The manifest these rules came from.
-  final Manifest manifest;
+  const _Rules._({
+    required this.pathSubstitutor,
+    required this.contentSubstitutor,
+    required this.classifier,
+    required this.noSubstitute,
+  });
 
-  final Substitutor _pathSubstitutor;
-  final Substitutor _contentSubstitutor;
-  final FileClassifier _classifier;
-  final List<Glob> _noSubstitute;
+  /// Applied to file and directory paths.
+  final Substitutor pathSubstitutor;
+
+  /// Applied to text content.
+  final Substitutor contentSubstitutor;
+  /// Decides text vs binary by extension.
+  final FileClassifier classifier;
+  /// Globs whose content is copied byte-for-byte.
+  final List<Glob> noSubstitute;
 
   /// The UTF-8 byte-order mark.
   static const _utf8Bom = [0xEF, 0xBB, 0xBF];
@@ -320,7 +344,7 @@ class _Rules {
   /// Containment is re-checked here, after substitution and independently of
   /// `ArchiveValidator`, so no caller can write outside its target directory.
   String rename(String key) {
-    final out = _pathSubstitutor.apply(key);
+    final out = pathSubstitutor.apply(key);
     if (!isContainedArchivePath(out)) {
       throw FormatException(
         "Archive entry 'files/$key' is not a contained relative path "
@@ -340,7 +364,7 @@ class _Rules {
   /// content sniffing.
   String? decodeForSubstitution(String key, List<int> bytes) {
     final verbatim =
-        _classifier.isBinary(key) || _noSubstitute.any((g) => g.matches(key));
+        classifier.isBinary(key) || noSubstitute.any((g) => g.matches(key));
     if (verbatim) {
       return null;
     }
@@ -352,10 +376,10 @@ class _Rules {
   }
 
   /// Applies the content substitutions to [text].
-  String substitute(String text) => _contentSubstitutor.apply(text);
+  String substitute(String text) => contentSubstitutor.apply(text);
 
   /// How many substitutions [text] would receive.
-  int countSubstitutions(String text) => _contentSubstitutor.count(text);
+  int countSubstitutions(String text) => contentSubstitutor.count(text);
 
   /// Encodes [text] back to bytes, restoring a BOM that [original] carried.
   ///
