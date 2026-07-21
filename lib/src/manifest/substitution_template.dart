@@ -168,6 +168,7 @@ class SubstitutionTemplate {
               "No value for variable '$variable' in a substitution.",
             );
           }
+
           buffer.write(transform == null ? value : transform.apply(value));
       }
     }
@@ -223,6 +224,7 @@ class SubstitutionTemplate {
       );
       return null;
     }
+    
     return PlaceholderSegment(name, transform);
   }
 }
