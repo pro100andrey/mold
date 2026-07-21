@@ -25,6 +25,7 @@ export 'src/manifest/substitution_template.dart'
         TemplateSegment;
 export 'src/output/embed_source.dart' show EmbedSource;
 export 'src/output/output_format.dart' show OutputFormat;
+export 'src/output/unified_diff.dart' show UnifiedDiff;
 export 'src/prompt/variable_prompter.dart' show LineReader, VariablePrompter;
 export 'src/prompt/variable_resolver.dart' show VariableResolver;
 export 'src/unbundler/case_converter.dart' show CaseConverter;
