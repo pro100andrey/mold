@@ -141,4 +141,86 @@ void main() {
       );
     });
   });
+
+  group('value semantics', () {
+    const variable = TemplateVariable(
+      name: 'p',
+      description: 'd',
+      defaultValue: 'v',
+      replaces: 'r',
+    );
+    const substitution = Substitution(from: 'a', to: 'b');
+
+    test('equal values hash equally', () {
+      // The contract Set and Map rely on: unequal hashes for equal values
+      // silently break lookup.
+      expect(
+        const TemplateVariable(
+          name: 'p',
+          description: 'd',
+          defaultValue: 'v',
+          replaces: 'r',
+        ).hashCode,
+        variable.hashCode,
+      );
+      expect(
+        const Substitution(from: 'a', to: 'b').hashCode,
+        substitution.hashCode,
+      );
+
+      const m = Manifest(
+        name: 'n',
+        version: '1',
+        variables: [variable],
+        extraSubstitutions: [substitution],
+      );
+      const same = Manifest(
+        name: 'n',
+        version: '1',
+        variables: [variable],
+        extraSubstitutions: [substitution],
+      );
+      expect(same.hashCode, m.hashCode);
+      // Added one at a time so the analyzer cannot fold the duplicate away —
+      // deduping at runtime is the property under test.
+      final seen = <Manifest>{}
+        ..add(m)
+        ..add(same);
+      expect(seen, hasLength(1), reason: 'a Set must dedupe them');
+    });
+
+    test('differing values are unequal', () {
+      expect(variable, isNot(const TemplateVariable(name: 'q')));
+      expect(substitution, isNot(const Substitution(from: 'a', to: 'c')));
+      expect(
+        const Manifest(name: 'n', version: '1'),
+        isNot(const Manifest(name: 'n', version: '2')),
+      );
+    });
+
+    test('toString names the fields, for a readable test failure', () {
+      expect(variable.toString(), allOf(contains('p'), contains('r')));
+      expect(substitution.toString(), contains('a'));
+      expect(
+        const Manifest(name: 'n', version: '1').toString(),
+        contains('name: n'),
+      );
+    });
+
+    test('provenance is outside equality', () {
+      // `source` and `path` record where a manifest came from, not what it
+      // means — including them would make a toYaml round trip impossible.
+      final parsed = Manifest.fromYaml('name: n\nversion: 1\n', path: '/x');
+      expect(parsed, const Manifest(name: 'n', version: '1'));
+      expect(parsed.path, '/x');
+      expect(parsed.source, isNotNull);
+    });
+
+    test('fromFile on a missing path is a FormatException', () {
+      expect(
+        () => Manifest.fromFile('/nonexistent/mold.yaml'),
+        throwsA(isA<FormatException>()),
+      );
+    });
+  });
 }

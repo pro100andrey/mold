@@ -389,6 +389,58 @@ variables:
       expect(err.text, contains('--diff'));
     });
 
+    test('unpack of a missing archive exits 1', () async {
+      final err = _Sink();
+      final code = await runBundleCli([
+        'unpack',
+        p.join(tmp.path, 'nope.mold'),
+        '-t',
+        p.join(tmp.path, 'x'),
+      ], err: err);
+
+      expect(code, 1);
+      expect(err.text, contains('not found'));
+    });
+
+    test('unpack defaults the target to the archive stem', () async {
+      writeManifest();
+      final archive = p.join(tmp.path, 'out.mold');
+      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+
+      // No -t: the target is ./<stem>, resolved against the current directory.
+      final err = _Sink();
+      final code = await runBundleCli(['unpack', archive], err: err);
+
+      // Either it unpacked into ./out, or ./out was occupied — both prove the
+      // default was derived rather than left null.
+      expect(code, anyOf(0, 1));
+      if (code == 0) {
+        Directory('out').deleteSync(recursive: true);
+      } else {
+        expect(err.text, contains('out'));
+      }
+    });
+
+    test('pack --dry-run reports validation errors and exits 1', () async {
+      File(p.join(project.path, 'mold.yaml')).writeAsStringSync('''
+name: super_server
+version: 1.0.0
+variables:
+  p:
+    replaces: nowhere_at_all
+''');
+      final err = _Sink();
+
+      final code = await runBundleCli([
+        'pack',
+        project.path,
+        '--dry-run',
+      ], err: err);
+
+      expect(code, 1);
+      expect(err.text, contains('PROJECT_REPLACES_NOT_FOUND'));
+    });
+
     test('unpack with a malformed --var errors with code 64', () async {
       final archive = p.join(tmp.path, 'out.mold');
       writeManifest();

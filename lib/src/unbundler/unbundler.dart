@@ -331,8 +331,10 @@ class _Rules {
 
   /// Applied to text content.
   final Substitutor contentSubstitutor;
+
   /// Decides text vs binary by extension.
   final FileClassifier classifier;
+
   /// Globs whose content is copied byte-for-byte.
   final List<Glob> noSubstitute;
 

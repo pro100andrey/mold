@@ -62,13 +62,14 @@ class GitignoreRules {
     String rootDir,
     Iterable<FileSystemEntity> entities,
   ) {
-    final files = [
-      for (final e in entities)
-        if (e is File && p.basename(e.path) == '.gitignore') e.path,
-    ]..sort((a, b) {
-      final byDepth = p.split(a).length.compareTo(p.split(b).length);
-      return byDepth != 0 ? byDepth : a.compareTo(b);
-    });
+    final files =
+        [
+          for (final e in entities)
+            if (e is File && p.basename(e.path) == '.gitignore') e.path,
+        ]..sort((a, b) {
+          final byDepth = p.split(a).length.compareTo(p.split(b).length);
+          return byDepth != 0 ? byDepth : a.compareTo(b);
+        });
 
     final rules = <_Rule>[
       // git never tracks its own directory and never lists it in .gitignore,
@@ -208,7 +209,8 @@ class GitignoreRules {
 
       // A leading slash anchors to this file's directory; so does any interior
       // slash. A trailing slash alone does not, and has already been stripped.
-      final anchored = line.startsWith('/') ||
+      final anchored =
+          line.startsWith('/') ||
           line.startsWith('!/') ||
           pattern.contains('/');
 

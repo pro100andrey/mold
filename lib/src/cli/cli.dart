@@ -384,7 +384,6 @@ class UnpackCommand extends Command<int> {
       return 1;
     }
   }
-
 }
 
 /// Prints what an unpack would do: a summary, the renames, the per-file
