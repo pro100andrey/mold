@@ -32,6 +32,7 @@ export 'src/unbundler/case_transform.dart' show CaseTransform;
 export 'src/unbundler/substitutor.dart' show Substitutor;
 export 'src/unbundler/target_validator.dart' show TargetValidator;
 export 'src/unbundler/unbundler.dart' show Unbundler, UnbundlerBase;
+export 'src/unbundler/unpack_plan.dart' show PlannedFile, UnpackPlan;
 export 'src/unbundler/variables_validator.dart'
     show VariablesInput, VariablesValidator;
 export 'src/validation/validation_error.dart' show Severity, ValidationError;

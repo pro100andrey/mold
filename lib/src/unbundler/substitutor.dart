@@ -24,6 +24,16 @@ class Substitutor {
     return input.replaceAllMapped(pattern, (m) => _table[m[0]!]!);
   }
 
+  /// How many replacements [apply] would make in [input].
+  ///
+  /// Counted from the same pattern [apply] uses, so a preview reports exactly
+  /// what a rewrite performs.
+  int count(String input) {
+    final pattern = _pattern;
+
+    return pattern == null ? 0 : pattern.allMatches(input).length;
+  }
+
   static final _special = RegExp(r'[\\^$.|?*+()[\]{}]');
 
   static String _escape(String s) =>

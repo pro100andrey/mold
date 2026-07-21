@@ -16,6 +16,7 @@ import '../prompt/variable_resolver.dart';
 import 'case_converter.dart';
 import 'substitutor.dart';
 import 'target_validator.dart';
+import 'unpack_plan.dart';
 import 'variables_validator.dart';
 
 /// The public unpacking contract: materialize a project from archive bytes.
@@ -54,27 +55,12 @@ class Unbundler implements UnbundlerBase {
     VariableResolver? resolver,
     void Function(String message)? onWarning,
   }) {
-    // Phase order: archive → manifest → target → variables. The first failing
-    // phase aborts before the next runs.
-    //
-    // Target precedes variables because resolving them may prompt: validating
-    // it afterwards made the user answer every prompt only to be told the
-    // destination was occupied, discarding all the input.
-    const ArchiveValidator().validate(bytes).throwIfInvalid();
-    final archive = const ArchiveReader().read(bytes);
-    final manifest = Manifest.fromYaml(archive.manifestYaml);
-    const ManifestValidator().validate(manifest).throwIfInvalid();
-    const TargetValidator().validate(targetDir).throwIfInvalid();
-
-    final resolved = (resolver ?? const VariableResolver()).resolve(
-      manifest.variables,
+    final (archive, manifest, resolved) = _prepare(
+      bytes,
+      targetDir,
       vars,
+      resolver,
     );
-    const VariablesValidator()
-        .validate(
-          VariablesInput(variables: manifest.variables, values: resolved),
-        )
-        .throwIfInvalid();
 
     // Re-checked immediately before writing. Resolving variables may block on
     // interactive input for minutes, and the earlier check is what keeps the
@@ -125,6 +111,39 @@ class Unbundler implements UnbundlerBase {
     );
   }
 
+  /// Validates the archive and resolves variables, shared by [unbundle] and
+  /// [plan] so a dry run runs exactly the checks a real unpack runs.
+  ///
+  /// Phase order: archive → manifest → target → variables. The first failing
+  /// phase aborts before the next runs. Target precedes variables because
+  /// resolving them may prompt: validating it afterwards made the user answer
+  /// every prompt only to be told the destination was occupied, discarding all
+  /// the input.
+  (BundleArchive, Manifest, Map<String, String>) _prepare(
+    List<int> bytes,
+    String targetDir,
+    Map<String, String> vars,
+    VariableResolver? resolver,
+  ) {
+    const ArchiveValidator().validate(bytes).throwIfInvalid();
+    final archive = const ArchiveReader().read(bytes);
+    final manifest = Manifest.fromYaml(archive.manifestYaml);
+    const ManifestValidator().validate(manifest).throwIfInvalid();
+    const TargetValidator().validate(targetDir).throwIfInvalid();
+
+    final resolved = (resolver ?? const VariableResolver()).resolve(
+      manifest.variables,
+      vars,
+    );
+    const VariablesValidator()
+        .validate(
+          VariablesInput(variables: manifest.variables, values: resolved),
+        )
+        .throwIfInvalid();
+
+    return (archive, manifest, resolved);
+  }
+
   /// Writes [archive]'s `files/` tree into [targetDir] with substitution, using
   /// the parsed [manifest] and already-[resolved] variable values.
   ///
@@ -140,66 +159,21 @@ class Unbundler implements UnbundlerBase {
     Map<String, String> resolved,
     void Function(String message)? onWarning,
   ) {
-    final renames = _buildTable(manifest, resolved);
-    // Paths get the renames plus any explicit path_renames. Longest-first
-    // matching is what makes the identity idiom work: `android/app/ ->
-    // android/app/` pins that path against the shorter `app` rename key.
-    final pathSubstitutor = Substitutor({
-      ...renames,
-      ..._render(manifest.pathRenames, resolved),
-    });
-    // Templates are rendered *before* the table is built, so the result enters
-    // the same single-pass longest-first match as the renames. That ordering
-    // is required, not incidental: `from: super_server.dev` (16 chars) must
-    // beat the rename key `super_server` (12) at the same position, which a
-    // sequential renames-then-substitutions pass would break.
-    //
-    // A rendered value is emitted verbatim and never re-scanned, and an
-    // explicit substitution whose `from` equals a derived rename key wins,
-    // because the spread puts it last.
-    final contentSubstitutor = Substitutor({
-      ...renames,
-      ..._render(manifest.extraSubstitutions, resolved),
-    });
-    final classifier = FileClassifier(
-      extraBinary: manifest.binaryExtensions.toSet(),
-    );
-    final noSubstitute = manifest.noSubstitute.map(Glob.new).toList();
+    final rules = _Rules(manifest, resolved);
 
     final target = Directory(targetDir)..createSync(recursive: true);
     final restoreExecutable = <String>[];
     for (final entry in archive.files.entries) {
-      final outRel = pathSubstitutor.apply(entry.key);
-      // Re-checked after substitution, and independently of ArchiveValidator,
-      // so a direct library call can never write outside its target directory.
-      if (!isContainedArchivePath(outRel)) {
-        throw FormatException(
-          "Archive entry 'files/${entry.key}' is not a contained relative "
-          'path (traversal, absolute, or drive-qualified).',
-        );
-      }
+      final outRel = rules.rename(entry.key);
       final outPath = p.join(target.path, outRel);
       final out = File(outPath)..parent.createSync(recursive: true);
 
-      final verbatim =
-          classifier.isBinary(entry.key) ||
-          noSubstitute.any((g) => g.matches(entry.key));
-      // Extension-based classification calls anything unlisted text, including
-      // extensionless files, so a "text" file can still hold non-UTF-8 bytes.
-      // Falling back to a verbatim copy keeps such a file intact instead of
-      // aborting the unpack partway through; classification stays extension-
-      // based, no content sniffing.
-      final decoded = verbatim ? null : _tryDecodeUtf8(entry.value);
+      final decoded = rules.decodeForSubstitution(entry.key, entry.value);
       if (decoded == null) {
         out.writeAsBytesSync(entry.value);
       } else {
-        // `utf8.decode` silently drops a leading BOM and `utf8.encode` does
-        // not put it back, so a substituted file would lose three bytes on
-        // every unpack — even under an identity rename. Common in
-        // Windows-authored .bat, .ps1 and .csproj files.
-        final encoded = utf8.encode(contentSubstitutor.apply(decoded));
         out.writeAsBytesSync(
-          _startsWithBom(entry.value) ? [..._utf8Bom, ...encoded] : encoded,
+          rules.encodeSubstituted(entry.value, rules.substitute(decoded)),
         );
       }
       if (archive.executable.contains(entry.key)) {
@@ -241,18 +215,126 @@ class Unbundler implements UnbundlerBase {
     }
   }
 
+  /// Builds a plan describing what an unpack would do, without doing it.
+  ///
+  /// Runs the same validation and variable resolution as [unbundle] and
+  /// applies the same [_Rules], so a preview cannot disagree with the real
+  /// unpack — it is that computation minus the writes. [targetDir] is
+  /// validated too, so a dry run also tells you the destination is usable.
+  UnpackPlan plan({
+    required List<int> bytes,
+    required String targetDir,
+    Map<String, String> vars = const {},
+    VariableResolver? resolver,
+  }) {
+    final (archive, manifest, resolved) = _prepare(
+      bytes,
+      targetDir,
+      vars,
+      resolver,
+    );
+    final rules = _Rules(manifest, resolved);
+
+    return UnpackPlan([
+      for (final entry in archive.files.entries)
+        _planOne(rules, entry.key, entry.value),
+    ]);
+  }
+
+  PlannedFile _planOne(_Rules rules, String key, List<int> bytes) {
+    final to = rules.rename(key);
+    final before = rules.decodeForSubstitution(key, bytes);
+    if (before == null) {
+      return PlannedFile(
+        from: key,
+        to: to,
+        verbatim: true,
+        replacements: 0,
+      );
+    }
+
+    final after = rules.substitute(before);
+    return PlannedFile(
+      from: key,
+      to: to,
+      verbatim: false,
+      replacements: rules.countSubstitutions(before),
+      before: before,
+      after: after,
+    );
+  }
+}
+
+/// The substitution rules for one unpack, derived once from the manifest and
+/// the resolved variables.
+///
+/// Both the writer and `Unbundler.plan` go through this, so a dry run and a
+/// real unpack cannot decide differently about any file.
+class _Rules {
+  _Rules(this.manifest, Map<String, String> resolved)
+    : _pathSubstitutor = Substitutor({
+        ..._buildTable(manifest, resolved),
+        ..._render(manifest.pathRenames, resolved),
+      }),
+      // Templates are rendered *before* the table is built, so the result
+      // enters the same single-pass longest-first match as the renames. That
+      // ordering is required, not incidental: `from: super_server.dev` (16
+      // chars) must beat the rename key `super_server` (12) at the same
+      // position, which a sequential renames-then-substitutions pass would
+      // break.
+      //
+      // A rendered value is emitted verbatim and never re-scanned, and an
+      // explicit substitution whose `from` equals a derived rename key wins,
+      // because the spread puts it last.
+      _contentSubstitutor = Substitutor({
+        ..._buildTable(manifest, resolved),
+        ..._render(manifest.extraSubstitutions, resolved),
+      }),
+      _classifier = FileClassifier(
+        extraBinary: manifest.binaryExtensions.toSet(),
+      ),
+      _noSubstitute = manifest.noSubstitute.map(Glob.new).toList();
+
+  /// The manifest these rules came from.
+  final Manifest manifest;
+
+  final Substitutor _pathSubstitutor;
+  final Substitutor _contentSubstitutor;
+  final FileClassifier _classifier;
+  final List<Glob> _noSubstitute;
+
   /// The UTF-8 byte-order mark.
   static const _utf8Bom = [0xEF, 0xBB, 0xBF];
 
-  /// Whether [bytes] open with a UTF-8 BOM.
-  bool _startsWithBom(List<int> bytes) =>
-      bytes.length >= 3 &&
-      bytes[0] == _utf8Bom[0] &&
-      bytes[1] == _utf8Bom[1] &&
-      bytes[2] == _utf8Bom[2];
+  /// Where the archive entry [key] lands, after path substitution.
+  ///
+  /// Containment is re-checked here, after substitution and independently of
+  /// `ArchiveValidator`, so no caller can write outside its target directory.
+  String rename(String key) {
+    final out = _pathSubstitutor.apply(key);
+    if (!isContainedArchivePath(out)) {
+      throw FormatException(
+        "Archive entry 'files/$key' is not a contained relative path "
+        '(traversal, absolute, or drive-qualified).',
+      );
+    }
+    return out;
+  }
 
-  /// Decodes [bytes] as UTF-8, or returns null when they are not valid UTF-8.
-  String? _tryDecodeUtf8(List<int> bytes) {
+  /// The decoded text of [bytes], or null when the entry is copied verbatim.
+  ///
+  /// Verbatim means a binary extension, a `no_substitute` match, or content
+  /// that is not valid UTF-8. Extension-based classification calls anything
+  /// unlisted text, including extensionless files, so a "text" file can still
+  /// hold non-UTF-8 bytes; falling back keeps it intact instead of aborting
+  /// the unpack partway through. Classification stays extension-based — no
+  /// content sniffing.
+  String? decodeForSubstitution(String key, List<int> bytes) {
+    final verbatim =
+        _classifier.isBinary(key) || _noSubstitute.any((g) => g.matches(key));
+    if (verbatim) {
+      return null;
+    }
     try {
       return utf8.decode(bytes);
     } on FormatException {
@@ -260,13 +342,36 @@ class Unbundler implements UnbundlerBase {
     }
   }
 
+  /// Applies the content substitutions to [text].
+  String substitute(String text) => _contentSubstitutor.apply(text);
+
+  /// How many substitutions [text] would receive.
+  int countSubstitutions(String text) => _contentSubstitutor.count(text);
+
+  /// Encodes [text] back to bytes, restoring a BOM that [original] carried.
+  ///
+  /// `utf8.decode` silently drops a leading BOM and `utf8.encode` does not put
+  /// it back, so a substituted file would lose three bytes on every unpack —
+  /// even under an identity rename. Common in Windows-authored .bat, .ps1 and
+  /// .csproj files.
+  List<int> encodeSubstituted(List<int> original, String text) {
+    final encoded = utf8.encode(text);
+    return _startsWithBom(original) ? [..._utf8Bom, ...encoded] : encoded;
+  }
+
+  static bool _startsWithBom(List<int> bytes) =>
+      bytes.length >= 3 &&
+      bytes[0] == _utf8Bom[0] &&
+      bytes[1] == _utf8Bom[1] &&
+      bytes[2] == _utf8Bom[2];
+
   /// Renders each substitution's `to` template against [resolved].
   ///
   /// Rendering is late by necessity: the archive embeds `mold.yaml` verbatim
-  /// and variable values are known only here. Everything statically decidable
-  /// — syntax, unknown variable, unknown transform — was already rejected by
-  /// `ManifestValidator`, which runs at both pack and unpack.
-  Map<String, String> _render(
+  /// and variable values are known only at unpack. Everything statically
+  /// decidable — syntax, unknown variable, unknown transform — was already
+  /// rejected by `ManifestValidator`, which runs at both pack and unpack.
+  static Map<String, String> _render(
     List<Substitution> substitutions,
     Map<String, String> resolved,
   ) => {
@@ -276,7 +381,7 @@ class Unbundler implements UnbundlerBase {
 
   /// Builds the case-variant replacement table from each variable's `replaces`
   /// token and its already-resolved value.
-  Map<String, String> _buildTable(
+  static Map<String, String> _buildTable(
     Manifest manifest,
     Map<String, String> resolved,
   ) {
@@ -296,7 +401,7 @@ class Unbundler implements UnbundlerBase {
       }
       table.addAll(converter.replacements(replaces, value));
     }
-    
+
     return table;
   }
 }
