@@ -35,8 +35,9 @@ CommandRunner<int> buildRunner(StringSink err) =>
 
 /// Runs the `mold` CLI and returns its process exit code.
 ///
-/// `0` ok, `1` IO/format failure, `64` usage error. Pure of `exit()` so it can
-/// be driven from tests: pass a buffer for [err] to capture output.
+/// `0` ok, `1` validation / IO / format failure, `64` usage error. Pure of
+/// `exit()` so it can be driven from tests: pass a buffer for [err] to capture
+/// output.
 Future<int> runBundleCli(List<String> args, {StringSink? err}) async {
   final sink = err ?? stderr;
   try {
@@ -46,6 +47,15 @@ Future<int> runBundleCli(List<String> args, {StringSink? err}) async {
       ..writeln(e.message)
       ..writeln(e.usage);
     return 64;
+  } on IOException catch (e) {
+    // One clause here rather than in each command: both bodies already run
+    // inside this try, so pack, unpack and any future subcommand are covered.
+    // IOException, not FileSystemException, so no future IO source escapes —
+    // writeAsBytesSync, readAsBytesSync, listSync and Process.runSync all
+    // throw subtypes of it. Without this the CLI exits 255 with a stack trace
+    // on an ordinary permissions or missing-directory failure.
+    sink.writeln(e.toString());
+    return 1;
   }
 }
 

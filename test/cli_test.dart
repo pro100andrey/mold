@@ -65,6 +65,24 @@ void main() {
       expect(err.text, contains('Could not find a command'));
     });
 
+    test('an IO failure exits 1, not with a stack trace', () async {
+      writeManifest();
+      // The output's parent is an existing *file*, so createSync throws a
+      // FileSystemException. Portable: no chmod, no platform guard.
+      final blocker = File(p.join(tmp.path, 'blocker'))..writeAsStringSync('');
+      final err = _Sink();
+
+      final code = await runBundleCli([
+        'pack',
+        project.path,
+        '-o',
+        p.join(blocker.path, 'out.mold'),
+      ], err: err);
+
+      expect(code, 1);
+      expect(err.text, isNotEmpty);
+    });
+
     test('unpack --var feeds substitution through the CLI', () async {
       File(p.join(project.path, 'mold.yaml')).writeAsStringSync('''
 name: super_server
