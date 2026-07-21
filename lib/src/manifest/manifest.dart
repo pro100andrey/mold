@@ -6,7 +6,8 @@ import 'package:yaml/yaml.dart';
 ///
 /// At unpack time the resolved value substitutes every casing of [replaces]
 /// throughout paths and text content (see `CaseConverter`). A variable without
-/// a [replaces] token carries a value for `extra_substitutions` only.
+/// a [replaces] token contributes no renames; its value is available to
+/// `extra_substitutions` through a `{{ name }}` placeholder.
 class TemplateVariable {
   const TemplateVariable({
     required this.name,
@@ -25,7 +26,7 @@ class TemplateVariable {
   final String? defaultValue;
 
   /// The source token to replace (in all four casings). Null when the variable
-  /// only feeds `extra_substitutions`.
+  /// exists only to be interpolated into `extra_substitutions`.
   final String? replaces;
 
   @override
@@ -169,6 +170,15 @@ class Manifest {
   /// glob-bearing field is added **here**, next to its declaration, rather than
   /// to a list buried in a validator that nothing points at.
   List<String> get globPatterns => [...include, ...exclude, ...noSubstitute];
+
+  /// Every string in this manifest that is interpreted as a substitution
+  /// template, keyed by the entry it belongs to so errors can name it.
+  ///
+  /// Same single-point-of-truth role as [globPatterns]: a new template-bearing
+  /// field is added here, beside its declaration.
+  Map<String, String> get replacementTemplates => {
+    for (final s in extraSubstitutions) s.from: s.to,
+  };
 
   /// Equality over the declared content, so a round trip through [toYaml] can
   /// be asserted in one expression and a field forgotten there fails loudly.

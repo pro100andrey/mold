@@ -11,6 +11,7 @@ import '../archive/archive_validator.dart';
 import '../bundler/file_classifier.dart';
 import '../manifest/manifest.dart';
 import '../manifest/manifest_validator.dart';
+import '../manifest/substitution_template.dart';
 import '../prompt/variable_resolver.dart';
 import 'case_converter.dart';
 import 'substitutor.dart';
@@ -140,9 +141,18 @@ class Unbundler implements UnbundlerBase {
   ) {
     final renames = _buildTable(manifest, resolved);
     final pathSubstitutor = Substitutor(renames);
+    // Templates are rendered *before* the table is built, so the result enters
+    // the same single-pass longest-first match as the renames. That ordering
+    // is required, not incidental: `from: super_server.dev` (16 chars) must
+    // beat the rename key `super_server` (12) at the same position, which a
+    // sequential renames-then-substitutions pass would break.
+    //
+    // A rendered value is emitted verbatim and never re-scanned, and an
+    // explicit substitution whose `from` equals a derived rename key wins,
+    // because the spread puts it last.
     final contentSubstitutor = Substitutor({
       ...renames,
-      for (final s in manifest.extraSubstitutions) s.from: s.to,
+      ..._render(manifest.extraSubstitutions, resolved),
     });
     final classifier = FileClassifier(
       extraBinary: manifest.binaryExtensions.toSet(),
@@ -225,6 +235,20 @@ class Unbundler implements UnbundlerBase {
       return null;
     }
   }
+
+  /// Renders each substitution's `to` template against [resolved].
+  ///
+  /// Rendering is late by necessity: the archive embeds `mold.yaml` verbatim
+  /// and variable values are known only here. Everything statically decidable
+  /// — syntax, unknown variable, unknown transform — was already rejected by
+  /// `ManifestValidator`, which runs at both pack and unpack.
+  Map<String, String> _render(
+    List<Substitution> substitutions,
+    Map<String, String> resolved,
+  ) => {
+    for (final s in substitutions)
+      s.from: SubstitutionTemplate.parse(s.to).render(resolved),
+  };
 
   /// Builds the case-variant replacement table from each variable's `replaces`
   /// token and its already-resolved value.

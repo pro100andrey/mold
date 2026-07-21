@@ -54,6 +54,45 @@ mold unpack <source> [options]
 
 Run `mold help pack` / `mold help unpack` for the full option list.
 
+## Interpolation in substitutions
+
+`replaces` derives four casings — snake, kebab, SCREAMING and Pascal — and that
+is deliberately all. A fifth would not generalise: for a single-word token
+camelCase is indistinguishable from snake_case, so deriving it is ambiguous.
+
+Forms outside those four are reached by naming them. Only the `to:` side of an
+`extra_substitutions` entry is a template; `from:` is always literal, so a
+template stays greppable against the real project.
+
+```text
+{{ variable }}                 the resolved value, unchanged
+{{ variable | transform }}     the value through one transform
+{{{{                           a literal "{{"
+```
+
+| transform       | `my_project` becomes |
+| --------------- | -------------------- |
+| `snakeCase`     | `my_project`         |
+| `kebabCase`     | `my-project`         |
+| `camelCase`     | `myProject`          |
+| `pascalCase`    | `MyProject`          |
+| `screamingCase` | `MY_PROJECT`         |
+| `titleCase`     | `My Project`         |
+
+Whitespace inside the braces is insignificant. Chaining (`{{ a | x | y }}`) is
+refused rather than read as a transform named `x | y`. A variable declared
+without `replaces` exists precisely to be interpolated.
+
+Why this matters concretely: Flutter derives its Apple bundle identifier by
+camelCasing the project name while Android keeps it snake, so one name yields
+`com.example.myProject` **and** `com.example.my_project` in the same project.
+The four casings cover the second; the first needs a named transform.
+
+Templates are validated at pack time (and again at unpack), so a bad
+placeholder or an undeclared variable fails when the template is built, not
+when someone uses it. Rendering happens at unpack, and a rendered value is
+never re-scanned — it cannot cascade into another substitution.
+
 ## The manifest (`mold.yaml`)
 
 ```yaml
@@ -76,11 +115,14 @@ variables:
     default: my_project
     replaces: super_server   # super_server / SuperServer / super-server / SUPER_SERVER
 
-# Literal replacements that automatic renaming can't reach (applied to text
-# content only, not paths).
+# Replacements that automatic renaming can't reach (applied to text content
+# only, not paths). `from` is always literal; `to` may interpolate a variable
+# through a case transform.
 extra_substitutions:
   - from: https://api.super.dev
     to: https://api.example.com
+  - from: com.example.superServer            # a casing `replaces` can't derive
+    to: com.example.{{ project_name | camelCase }}
 
 # Text files copied verbatim (no substitution), even though their extension
 # is text. Globs.
@@ -220,14 +262,14 @@ Every phase is validated with structured, coded errors. A
 `ValidationResult.throwIfInvalid()` throws a `ValidationException` when any
 error-severity issue is present; warnings never block.
 
-| Phase  | Validator            | Checks                                                                                  |
-| ------ | -------------------- | --------------------------------------------------------------------------------------- |
-| pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, usable `replaces` tokens          |
-| pack   | `ProjectValidator`   | dir has files to pack, each `replaces` token occurs; warns on overlap and skipped links |
-| unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree, no entry escapes the target   |
-| unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                    |
-| unpack | `TargetValidator`    | parent exists, destination free, writable                                               |
-| unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token                 |
+| Phase  | Validator            | Checks                                                                                                        |
+| ------ | -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, usable `replaces` tokens, well-formed `{{ }}` templates |
+| pack   | `ProjectValidator`   | dir has files to pack, each `replaces` token occurs; warns on overlap and skipped links                       |
+| unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree, no entry escapes the target                         |
+| unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                                          |
+| unpack | `TargetValidator`    | parent exists, destination free, writable                                                                     |
+| unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token                                       |
 
 Order — pack: `Manifest → Project`; unpack:
 `Archive → Manifest → Target → Variables`. The first failing phase aborts before
@@ -248,6 +290,8 @@ along with all the others, rather than aborting on the first one.
   UTF-8 fallback above is a decode failure, not classification).
 - File modes beyond the executable bit (no ownership, no full mode round trip).
 - Preserving symlinks as symlinks (they are dereferenced; see above).
-- Templating beyond literal substitution (no conditionals/loops/partials).
+- Templating the packed files. Project content is never evaluated — no
+  conditionals, loops, partials or includes, and a `{{ }}` inside a packed file
+  is just text. The one place `{{ }}` is interpreted is a manifest `to:` value.
 - Compression other than gzip, encryption, or signing.
 - Remote template registries / fetching over the network.

@@ -106,6 +106,74 @@ void main() {
         });
       }
 
+      test('MANIFEST_UNKNOWN_VARIABLE', () {
+        // The exact manifest from manifest_test.dart: `{{api_url}}` used to be
+        // an inert literal, and is now a placeholder naming an undeclared
+        // variable. This is the deliberate break.
+        final m = Manifest.fromYaml('''
+name: x
+version: 1
+extra_substitutions:
+  - from: https://api.example.com
+    to: "{{api_url}}"
+''');
+        expect(
+          validator.validate(m),
+          rejectsWith(ManifestValidator.unknownVariable),
+        );
+      });
+
+      test('MANIFEST_UNKNOWN_TRANSFORM', () {
+        final m = Manifest.fromYaml('''
+name: x
+version: 1
+variables:
+  p:
+    replaces: foo
+extra_substitutions:
+  - from: a
+    to: "{{ p | camlCase }}"
+''');
+        expect(
+          validator.validate(m),
+          rejectsWith(ManifestValidator.unknownTransform),
+        );
+      });
+
+      test('MANIFEST_UNTERMINATED_PLACEHOLDER', () {
+        final m = Manifest.fromYaml('''
+name: x
+version: 1
+variables:
+  p:
+    replaces: foo
+extra_substitutions:
+  - from: a
+    to: "com.example.{{ p"
+''');
+        expect(
+          validator.validate(m),
+          rejectsWith(ManifestValidator.unterminatedPlaceholder),
+        );
+      });
+
+      test('MANIFEST_MALFORMED_PLACEHOLDER', () {
+        final m = Manifest.fromYaml('''
+name: x
+version: 1
+variables:
+  p:
+    replaces: foo
+extra_substitutions:
+  - from: a
+    to: "{{ p | snakeCase | camelCase }}"
+''');
+        expect(
+          validator.validate(m),
+          rejectsWith(ManifestValidator.malformedPlaceholder),
+        );
+      });
+
       test('MANIFEST_EMPTY_REPLACES', () {
         final m = Manifest.fromYaml('''
 name: x

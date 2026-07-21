@@ -60,6 +60,10 @@ binary_extensions:
 ''');
       expect(m.extraSubstitutions, hasLength(1));
       expect(m.extraSubstitutions.single.from, 'https://api.example.com');
+      // The manifest stores the template UNRENDERED; interpolation happens at
+      // unpack, so parsing keeps it verbatim. But it is no longer an inert
+      // literal: this manifest declares no `api_url`, which validators_test
+      // pins as MANIFEST_UNKNOWN_VARIABLE.
       expect(m.extraSubstitutions.single.to, '{{api_url}}');
       expect(m.noSubstitute, ['pubspec.lock', '**/*.g.dart']);
       expect(m.binaryExtensions, ['lockb', '.myblob']);
