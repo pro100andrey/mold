@@ -32,12 +32,12 @@ enum CaseTransform {
   String apply(String value) {
     const converter = CaseConverter();
     return switch (this) {
-      CaseTransform.snakeCase => converter.toSnake(value),
-      CaseTransform.kebabCase => converter.toKebab(value),
-      CaseTransform.camelCase => converter.toCamel(value),
-      CaseTransform.pascalCase => converter.toPascal(value),
-      CaseTransform.screamingCase => converter.toScreamingSnake(value),
-      CaseTransform.titleCase => converter.toTitle(value),
+      .snakeCase => converter.toSnake(value),
+      .kebabCase => converter.toKebab(value),
+      .camelCase => converter.toCamel(value),
+      .pascalCase => converter.toPascal(value),
+      .screamingCase => converter.toScreamingSnake(value),
+      .titleCase => converter.toTitle(value),
     };
   }
 
@@ -48,6 +48,7 @@ enum CaseTransform {
         return transform;
       }
     }
+
     return null;
   }
 

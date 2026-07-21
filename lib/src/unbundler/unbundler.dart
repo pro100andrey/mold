@@ -181,6 +181,7 @@ class Unbundler implements UnbundlerBase {
           rules.encodeSubstituted(entry.value, rules.substitute(decoded)),
         );
       }
+
       if (archive.executable.contains(entry.key)) {
         restoreExecutable.add(outPath);
       }
@@ -203,6 +204,7 @@ class Unbundler implements UnbundlerBase {
     if (paths.isEmpty || Platform.isWindows) {
       return;
     }
+
     const chunkSize = 500;
     for (var i = 0; i < paths.length; i += chunkSize) {
       final chunk = paths.sublist(i, min(i + chunkSize, paths.length));
@@ -353,6 +355,7 @@ class _Rules {
         '(traversal, absolute, or drive-qualified).',
       );
     }
+
     return out;
   }
 
@@ -370,6 +373,7 @@ class _Rules {
     if (verbatim) {
       return null;
     }
+
     try {
       return utf8.decode(bytes);
     } on FormatException {
@@ -391,6 +395,7 @@ class _Rules {
   /// .csproj files.
   List<int> encodeSubstituted(List<int> original, String text) {
     final encoded = utf8.encode(text);
+
     return _startsWithBom(original) ? [..._utf8Bom, ...encoded] : encoded;
   }
 

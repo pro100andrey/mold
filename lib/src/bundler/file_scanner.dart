@@ -126,6 +126,7 @@ class FileScanner {
         gitignored++;
         continue;
       }
+
       if (!_isIncluded(rel) || _isExcluded(rel)) {
         continue;
       }
@@ -165,19 +166,20 @@ class FileScanner {
     }
 
     if (!p.isWithin(canonicalRoot, resolved)) {
-      return SkipReason.outsideProject;
+      return .outsideProject;
     }
     // The link's own path passed the filters; its target must too, or a link
     // would smuggle an excluded file into the archive.
     final relTarget = _relative(resolved, canonicalRoot);
     if (!_isIncluded(relTarget) || _isExcluded(relTarget)) {
-      return SkipReason.filteredOut;
+      return .filteredOut;
     }
     // Recursing into a directory link would have to handle cycles; a template
     // that needs the contents can include the real directory instead.
     if (FileSystemEntity.isDirectorySync(resolved)) {
-      return SkipReason.directory;
+      return .directory;
     }
+
     return null;
   }
 
@@ -185,9 +187,9 @@ class FileScanner {
   /// on Linux and 62 on macOS.
   SkipReason _resolutionFailure(FileSystemException e) =>
       switch (e.osError?.errorCode) {
-        2 => SkipReason.dangling,
-        40 || 62 => SkipReason.circular,
-        _ => SkipReason.unresolvable,
+        2 => .dangling,
+        40 || 62 => .circular,
+        _ => .unresolvable,
       };
 
   /// Whether [path] is owner-executable. Follows links, so a dereferenced

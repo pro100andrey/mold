@@ -41,12 +41,12 @@ class FileClassifier {
   };
 
   /// Classifies the file at [path] by its extension.
-  FileKind classify(String path) =>
-      isBinary(path) ? FileKind.binary : FileKind.text;
+  FileKind classify(String path) => isBinary(path) ? .binary : .text;
 
   /// Whether the file at [path] is binary (copied verbatim).
   bool isBinary(String path) {
     final ext = _normalize(p.extension(path));
+
     return ext.isNotEmpty && _binary.contains(ext);
   }
 

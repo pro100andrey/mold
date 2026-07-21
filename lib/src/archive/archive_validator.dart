@@ -59,6 +59,7 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
       if (!name.startsWith('files/')) {
         continue;
       }
+
       final rel = name.substring('files/'.length);
       if (!isContainedArchivePath(rel)) {
         issues.add(

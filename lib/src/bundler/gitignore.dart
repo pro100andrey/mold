@@ -99,10 +99,10 @@ class GitignoreRules {
   factory GitignoreRules.load(String rootDir) {
     final root = Directory(rootDir);
     if (!root.existsSync()) {
-      return const GitignoreRules.empty();
+      return const .empty();
     }
 
-    return GitignoreRules.fromListing(
+    return .fromListing(
       rootDir,
       root.listSync(recursive: true, followLinks: false),
     );
@@ -126,6 +126,7 @@ class GitignoreRules {
       if (isLast) {
         return ignored;
       }
+
       if (ignored) {
         return true;
       }
@@ -167,6 +168,7 @@ class GitignoreRules {
     if (!pattern.contains('**/')) {
       return [pattern];
     }
+
     final index = pattern.indexOf('**/');
     final head = pattern.substring(0, index);
     final tail = pattern.substring(index + 3);
@@ -197,6 +199,7 @@ class GitignoreRules {
       if (dirOnly) {
         pattern = pattern.substring(0, pattern.length - 1);
       }
+
       if (pattern.startsWith('/')) {
         pattern = pattern.substring(1);
       }

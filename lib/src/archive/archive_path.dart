@@ -22,6 +22,8 @@ bool isContainedArchivePath(String relPath) {
   if (p.posix.isAbsolute(relPath) || p.windows.isAbsolute(relPath)) {
     return false;
   }
+
   final normalized = p.posix.normalize(relPath);
+
   return normalized != '..' && !normalized.startsWith('../');
 }

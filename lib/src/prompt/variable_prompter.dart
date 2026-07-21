@@ -39,6 +39,7 @@ class VariablePrompter {
     }
 
     final trimmed = line.trim();
+
     return trimmed.isEmpty && def != null ? def : trimmed;
   }
 }

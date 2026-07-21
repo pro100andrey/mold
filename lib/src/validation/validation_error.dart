@@ -13,12 +13,12 @@ class ValidationError {
     this.code,
     this.message, {
     this.field,
-    this.severity = Severity.error,
+    this.severity = .error,
   });
 
   /// A warning-severity issue (does not block).
   const ValidationError.warning(this.code, this.message, {this.field})
-    : severity = Severity.warning;
+    : severity = .warning;
 
   /// Stable machine code, e.g. `MANIFEST_MISSING_NAME`.
   final String code;

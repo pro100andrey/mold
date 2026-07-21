@@ -57,6 +57,7 @@ class UnifiedDiff {
         out.writeln('${edit.sign}${edit.text}');
       }
     }
+
     return out.toString();
   }
 
@@ -70,6 +71,7 @@ class UnifiedDiff {
     if (text.isEmpty) {
       return const [];
     }
+
     final lines = text.split('\n');
     if (lines.last.isEmpty) {
       lines.removeLast();
@@ -84,6 +86,7 @@ class UnifiedDiff {
     while (head < a.length && head < b.length && a[head] == b[head]) {
       head++;
     }
+
     var tail = 0;
     while (tail < a.length - head &&
         tail < b.length - head &&
@@ -105,12 +108,15 @@ class UnifiedDiff {
     if (a.isEmpty && b.isEmpty) {
       return const [];
     }
+
     if (a.isEmpty) {
       return [for (final line in b) _Edit(_Op.add, line)];
     }
+
     if (b.isEmpty) {
       return [for (final line in a) _Edit(_Op.remove, line)];
     }
+
     if (a.length > maxWindow || b.length > maxWindow) {
       return [
         for (final line in a) _Edit(_Op.remove, line),
@@ -146,12 +152,15 @@ class UnifiedDiff {
         j++;
       }
     }
+
     while (i < a.length) {
       edits.add(_Edit(_Op.remove, a[i++]));
     }
+
     while (j < b.length) {
       edits.add(_Edit(_Op.add, b[j++]));
     }
+
     return edits;
   }
 
@@ -173,10 +182,12 @@ class UnifiedDiff {
         end = min(edits.length, index + context + 1);
         continue;
       }
+
       hunks.add(_hunk(edits, start, end));
       start = max(0, index - context);
       end = min(edits.length, index + context + 1);
     }
+
     hunks.add(_hunk(edits, start, end));
 
     return hunks;
@@ -189,6 +200,7 @@ class UnifiedDiff {
       if (edits[i].op != _Op.add) {
         oldStart++;
       }
+
       if (edits[i].op != _Op.remove) {
         newStart++;
       }

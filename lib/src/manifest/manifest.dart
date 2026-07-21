@@ -76,11 +76,13 @@ bool _listEquals<T>(List<T> a, List<T> b) {
   if (a.length != b.length) {
     return false;
   }
+
   for (var i = 0; i < a.length; i++) {
     if (a[i] != b[i]) {
       return false;
     }
   }
+
   return true;
 }
 
@@ -296,13 +298,17 @@ class Manifest {
           buffer.writeln('  ${_scalar(v.name)}: {}');
           continue;
         }
+
         buffer.writeln('  ${_scalar(v.name)}:');
+
         if (v.description.isNotEmpty) {
           buffer.writeln('    description: ${_scalar(v.description)}');
         }
+
         if (defaultValue != null) {
           buffer.writeln('    default: ${_scalar(defaultValue)}');
         }
+
         if (replaces != null) {
           buffer.writeln('    replaces: ${_scalar(replaces)}');
         }
@@ -315,6 +321,7 @@ class Manifest {
     if (!useGitignore) {
       buffer.writeln('use_gitignore: false');
     }
+
     _writeList(buffer, 'no_substitute', noSubstitute);
     _writeList(buffer, 'binary_extensions', binaryExtensions);
 
@@ -330,6 +337,7 @@ class Manifest {
     if (items.isEmpty) {
       return;
     }
+
     buffer.writeln('$key:');
     for (final s in items) {
       buffer
@@ -342,6 +350,7 @@ class Manifest {
     if (items.isEmpty) {
       return;
     }
+
     buffer.writeln('$key:');
     for (final item in items) {
       buffer.writeln('  - ${_scalar(item)}');

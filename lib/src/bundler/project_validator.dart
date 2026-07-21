@@ -31,6 +31,7 @@ class _TokenStats {
   /// Records one match, and the identifier enclosing it when there is one.
   void record({String? enclosing}) {
     _matches++;
+
     if (enclosing != null) {
       _adjacent++;
       _collisions[enclosing] = (_collisions[enclosing] ?? 0) + 1;
@@ -41,6 +42,7 @@ class _TokenStats {
   String describe([int limit = 3]) {
     final sorted = _collisions.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
+
     return sorted.take(limit).map((e) => '${e.key} (${e.value})').join(', ');
   }
 }
@@ -164,7 +166,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
         );
       } else if (s.ratio >= _warnRatio) {
         issues.add(
-          ValidationError.warning(
+          .warning(
             partialOverlap,
             "Variable '$name': token '$token' matches ${s.matches} times; "
             '${s.adjacent} ($percent%) inside longer words: ${s.describe()}. '
@@ -259,10 +261,12 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       while (start > 0 && word.hasMatch(hay[start - 1])) {
         start--;
       }
+
       var stop = end;
       while (stop < hay.length && word.hasMatch(hay[stop])) {
         stop++;
       }
+
       into.record(enclosing: hay.substring(start, stop));
     }
   }

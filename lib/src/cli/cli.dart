@@ -126,6 +126,7 @@ class PackCommand extends Command<int> {
       if (results.rest.isEmpty) {
         throw const CliException('Missing <source_dir>.');
       }
+
       final sourceDir = results.rest.first;
 
       final manifestPath =
@@ -137,6 +138,7 @@ class PackCommand extends Command<int> {
       if (results['diff'] as bool) {
         return _previewPack(sourceDir, manifest, packVars);
       }
+
       if (packVars.isNotEmpty) {
         // Packing substitutes nothing, so a value passed here can only be for
         // the preview. Silently dropping it would leave the user believing it
@@ -146,6 +148,7 @@ class PackCommand extends Command<int> {
           'substitution. Drop it, or add --diff to preview.',
         );
       }
+
       if (results['dry-run'] as bool) {
         return _dryRunPack(sourceDir, manifest);
       }
@@ -195,6 +198,7 @@ class PackCommand extends Command<int> {
     for (final warning in result.warnings) {
       _err.writeln('Warning: $warning');
     }
+
     if (!result.isValid) {
       _err.writeln(ValidationException(result.errors).toString());
       return 1;
@@ -211,6 +215,7 @@ class PackCommand extends Command<int> {
       'captured, ${scan.gitignored} gitignored, '
       '${scan.skippedLinks.length} symlinks skipped.',
     );
+
     for (final rel in scan.files) {
       _err.writeln('  $rel');
     }
@@ -273,6 +278,7 @@ class PackCommand extends Command<int> {
         "No manifest: '$path' not found and --manifest not given.",
       );
     }
+
     return path;
   }
 }
@@ -348,6 +354,7 @@ class UnpackCommand extends Command<int> {
         if (!file.existsSync()) {
           throw FormatException('Archive not found: $source');
         }
+
         _printPlan(
           _err,
           const Unbundler().plan(
@@ -361,6 +368,7 @@ class UnpackCommand extends Command<int> {
           targetDir,
           showDiff: showDiff,
         );
+
         return 0;
       }
 
@@ -439,6 +447,7 @@ void _printPlan(
     if (before == null || after == null) {
       continue;
     }
+
     final rendered = differ.render(
       before: before,
       after: after,

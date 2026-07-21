@@ -42,6 +42,7 @@ class CaseConverter {
     if (words.isEmpty) {
       return '';
     }
+
     return words.first + words.skip(1).map(_capitalize).join();
   }
 

@@ -90,6 +90,7 @@ class SubstitutionTemplate {
         literal.write(text.substring(i));
         break;
       }
+
       literal.write(text.substring(i, open));
 
       // Four braces escape a literal `{{`; checked before two, so the choice
@@ -104,7 +105,7 @@ class SubstitutionTemplate {
       if (close == -1) {
         errors.add(
           TemplateError(
-            TemplateErrorKind.unterminated,
+            .unterminated,
             "Unterminated placeholder in '$text': '{{' has no matching '}}'.",
           ),
         );
@@ -122,15 +123,17 @@ class SubstitutionTemplate {
         }
         segments.add(segment);
       }
+
       i = close + 2;
     }
 
     if (literal.isNotEmpty) {
       segments.add(LiteralSegment(literal.toString()));
     }
+
     return SubstitutionTemplate._(
-      List.unmodifiable(segments),
-      List.unmodifiable(errors),
+      .unmodifiable(segments),
+      .unmodifiable(errors),
     );
   }
 
@@ -168,6 +171,7 @@ class SubstitutionTemplate {
           buffer.write(transform == null ? value : transform.apply(value));
       }
     }
+
     return buffer.toString();
   }
 
@@ -194,11 +198,12 @@ class SubstitutionTemplate {
     if (!_name.hasMatch(name)) {
       errors.add(
         TemplateError(
-          TemplateErrorKind.malformed,
+          .malformed,
           "Malformed placeholder '{{$body}}' in '$whole': "
           "'$name' is not a variable name.",
         ),
       );
+
       return null;
     }
 
@@ -211,7 +216,7 @@ class SubstitutionTemplate {
     if (transform == null) {
       errors.add(
         TemplateError(
-          TemplateErrorKind.unknownTransform,
+          .unknownTransform,
           "Unknown transform '$transformName' in '{{$body}}'. "
           'Valid transforms: ${CaseTransform.names}.',
         ),

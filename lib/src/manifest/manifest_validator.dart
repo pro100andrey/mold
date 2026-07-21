@@ -45,6 +45,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
         ),
       );
     }
+
     if (input.version.isEmpty) {
       issues.add(
         const ValidationError(
@@ -124,9 +125,9 @@ class ManifestValidator extends ValidatorBase<Manifest> {
         issues.add(
           ValidationError(
             switch (error.kind) {
-              TemplateErrorKind.unterminated => unterminatedPlaceholder,
-              TemplateErrorKind.malformed => malformedPlaceholder,
-              TemplateErrorKind.unknownTransform => unknownTransform,
+              .unterminated => unterminatedPlaceholder,
+              .malformed => malformedPlaceholder,
+              .unknownTransform => unknownTransform,
             },
             error.message,
             field: from,
@@ -151,7 +152,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
     for (final variable in input.variables) {
       if (variable.replaces == null && !referenced.contains(variable.name)) {
         issues.add(
-          ValidationError.warning(
+          .warning(
             unusedVariable,
             "Variable '${variable.name}' has no 'replaces' and is not "
             'referenced by any substitution, so it does nothing.',

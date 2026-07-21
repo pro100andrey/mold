@@ -48,6 +48,7 @@ class Bundler implements BundlerBase {
       for (final warning in result.warnings) {
         onWarning?.call(warning.toString());
       }
+
       result.throwIfInvalid();
     }
 
@@ -65,7 +66,6 @@ class Bundler implements BundlerBase {
       useGitignore: manifest.useGitignore,
     );
     final scan = scanner.scan(projectDir);
-
     final files = <String, List<int>>{};
     for (final rel in scan.files) {
       files[rel] = File(p.join(projectDir, rel)).readAsBytesSync();
