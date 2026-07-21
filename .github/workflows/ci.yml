@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+# A push that lands while an earlier run is still going supersedes it; only
+# the tip of a branch is worth a full run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: format, analyze, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          # Matches the `sdk:` constraint in pubspec.yaml. The code uses Dart
+          # 3.12 dot shorthands, so an older SDK will not parse it.
+          sdk: 3.12.2
+
+      - name: Install dependencies
+        run: dart pub get
+
+      # --set-exit-if-changed, or a misformatted file passes silently and the
+      # next contributor's diff is full of unrelated reformatting.
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      # --fatal-infos: the lint set is deliberately strict, and an info that
+      # nobody has to fix is an info nobody reads.
+      - name: Analyze
+        run: dart analyze --fatal-infos
+
+      - name: Test
+        run: dart test --reporter=expanded
+
+      # The package is meant to be published; catching a missing LICENSE or a
+      # malformed pubspec here is cheaper than at release time.
+      - name: Validate the package
+        run: dart pub publish --dry-run
+
+  # Windows and macOS run the same suite: several behaviours are
+  # platform-specific — the executable bit, symlink handling, `chmod` — and
+  # the tests that cover them are annotated `@TestOn('!windows')` precisely
+  # because they cannot pass everywhere.
+  platforms:
+    name: test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.2
+      - run: dart pub get
+      - run: dart test --reporter=expanded
