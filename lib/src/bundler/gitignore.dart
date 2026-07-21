@@ -48,6 +48,13 @@ class GitignoreRules {
   /// Rules that ignore nothing.
   const GitignoreRules.empty() : _rules = const [];
 
+  /// The rules in force before any `.gitignore` is read: `.git` only.
+  ///
+  /// The seed for a descending scan, which picks up each directory's
+  /// `.gitignore` as it enters it — the way git itself does — instead of
+  /// collecting every file up front.
+  factory GitignoreRules.base() => GitignoreRules._([_gitDirectory]);
+
   /// Builds the rules from the `.gitignore` files among [entities], each path
   /// interpreted relative to [rootDir].
   ///
@@ -71,15 +78,7 @@ class GitignoreRules {
           return byDepth != 0 ? byDepth : a.compareTo(b);
         });
 
-    final rules = <_Rule>[
-      // git never tracks its own directory and never lists it in .gitignore,
-      // so nothing would exclude it otherwise.
-      _Rule(
-        [Glob('.git'), Glob('**/.git')],
-        negated: false,
-        dirOnly: true,
-      ),
-    ];
+    final rules = <_Rule>[_gitDirectory];
     for (final file in files) {
       final scope = p.posix.joinAll(
         p.split(p.relative(p.dirname(file), from: rootDir)),
@@ -110,6 +109,14 @@ class GitignoreRules {
 
   final List<_Rule> _rules;
 
+  /// git never tracks its own directory and never lists it in `.gitignore`,
+  /// so nothing would exclude it otherwise.
+  static final _gitDirectory = _Rule(
+    [Glob('.git'), Glob('**/.git')],
+    negated: false,
+    dirOnly: true,
+  );
+
   /// Whether [relPath] — POSIX-separated, relative to the project root — is
   /// ignored.
   ///
@@ -134,6 +141,26 @@ class GitignoreRules {
 
     return false;
   }
+
+  /// These rules plus the ones [lines] declares, scoped to directory [scope].
+  ///
+  /// Returns `this` when [lines] adds nothing, so a tree without `.gitignore`
+  /// files allocates no rule lists at all while descending it.
+  GitignoreRules extend(String scope, List<String> lines) {
+    final added = _parse(lines, scope);
+
+    return added.isEmpty ? this : GitignoreRules._([..._rules, ...added]);
+  }
+
+  /// Whether [relPath] is ignored, given that its ancestors are known not to
+  /// be.
+  ///
+  /// The check for a descending scan, which decides each directory before
+  /// entering it and never enters an ignored one — so by the time an entry is
+  /// tested, the ancestor walk [isIgnored] performs has already happened, one
+  /// level at a time.
+  bool isIgnoredEntry(String relPath, {required bool isDirectory}) =>
+      _verdict(relPath, isDirectory: isDirectory);
 
   /// The last-match-wins verdict for a single path.
   bool _verdict(String path, {required bool isDirectory}) {

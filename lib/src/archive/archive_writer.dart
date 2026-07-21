@@ -4,6 +4,18 @@ import 'package:archive/archive.dart';
 
 /// Assembles the template archive: a gzipped tar laid out as `mold.yaml`
 /// (the embedded manifest) plus a `files/` tree (the project verbatim).
+///
+/// **Memory.** The whole project is held in memory, and so are the tar and the
+/// gzip built from it: measured at a 1140 MiB peak for a 221 MiB tree, about
+/// 4x. That is inherent to returning the archive as bytes — which `pack
+/// --diff`, the embeddable output formats and `unbundleBytes` all require —
+/// combined with `package:archive`'s non-streaming encoders. Scoping the
+/// intermediate `Archive` so it is collectable before gzip runs was tried and
+/// measured at zero effect, so it is not done here.
+///
+/// Templates are source projects, so this is a bound worth knowing rather than
+/// a problem in practice; packing a tree of many gigabytes would need a
+/// streaming encoder writing straight to a file, and a different signature.
 class ArchiveWriter {
   const ArchiveWriter();
 

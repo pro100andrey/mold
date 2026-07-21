@@ -68,9 +68,12 @@ class Bundler implements BundlerBase {
       ),
     );
 
-    // Non-null past the validator: a null scan means the directory is missing,
-    // which it reports as an error, and `report` throws on one.
-    final scan = scanned!;
+    // Normally non-null past the validator, which turns a missing directory
+    // into an error `report` throws on. Falling back rather than asserting
+    // covers the one case where it is not: a directory created between the
+    // check above and the validator's own, where `!` would raise a TypeError
+    // no layer catches.
+    final scan = scanned ?? ProjectValidator.scanFor(projectDir, manifest);
     final files = <String, List<int>>{};
     for (final rel in scan.files) {
       files[rel] = File(p.join(projectDir, rel)).readAsBytesSync();

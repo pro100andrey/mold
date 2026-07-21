@@ -27,22 +27,39 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
   /// Validates the `from` → `to` mapping of every archive entry.
   @override
   ValidationResult validate(Map<String, String> input) {
-    // Keyed by destination, insertion-ordered, so the message lists the
-    // colliding sources in archive order and is reproducible.
+    // Two passes so the common case — every destination distinct — allocates
+    // one Set rather than a growable List per file. Only destinations that
+    // actually collide get a list built for them.
+    final seen = <String>{};
+    final collided = <String>{};
+    for (final to in input.values) {
+      if (!seen.add(to)) {
+        collided.add(to);
+      }
+    }
+    if (collided.isEmpty) {
+      return .ok();
+    }
+
+    // Insertion-ordered, so the message lists the sources in archive order and
+    // the same archive always produces the same message.
     final sources = <String, List<String>>{};
-    input.forEach((from, to) => (sources[to] ??= []).add(from));
+    input.forEach((from, to) {
+      if (collided.contains(to)) {
+        (sources[to] ??= []).add(from);
+      }
+    });
 
     return ValidationResult([
       for (final entry in sources.entries)
-        if (entry.value.length > 1)
-          ValidationError(
-            collision,
-            '${entry.value.length} archive entries would all be written to '
-            "'${entry.key}': ${entry.value.join(', ')}. Only the last would "
-            'survive. Give them distinct names, or use path_renames to pin '
-            'one of them.',
-            field: entry.key,
-          ),
+        ValidationError(
+          collision,
+          '${entry.value.length} archive entries would all be written to '
+          "'${entry.key}': ${entry.value.join(', ')}. Only the last would "
+          'survive. Give them distinct names, or use path_renames to pin '
+          'one of them.',
+          field: entry.key,
+        ),
     ]);
   }
 }

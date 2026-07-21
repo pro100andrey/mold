@@ -42,10 +42,15 @@ class Unbundler implements UnbundlerBase {
 
   /// Unpacks the in-memory archive [bytes] into [targetDir] (the core path).
   ///
-  /// [vars] holds explicit `--var` values; any variable absent from it is
-  /// resolved by [resolver] (default/prompt per its configuration). Without a
-  /// [resolver], unresolved variables fall back to the manifest `default`; one
-  /// with no default is reported by `VariablesValidator`.
+  /// [vars] holds explicit values; any variable absent from it is resolved by
+  /// [resolver] (default/prompt per its configuration). Without a [resolver],
+  /// unresolved variables fall back to the manifest `default`; one with no
+  /// default is reported by `VariablesValidator`.
+  ///
+  /// Every key of [vars] must name a variable the template declares — a key
+  /// that does not is `VARIABLE_UNKNOWN`, not a value quietly ignored. Passing
+  /// one shared map across several templates therefore does **not** work; pass
+  /// each template the subset it declares.
   ///
   /// [onWarning] receives non-fatal problems that would otherwise be silent,
   /// such as failing to restore an executable bit.
@@ -69,7 +74,12 @@ class Unbundler implements UnbundlerBase {
     // interactive input for minutes, and the earlier check is what keeps the
     // user from typing answers that get thrown away — it is not a claim that
     // the target is still free once they finish.
-    const TargetValidator().validate(targetDir).throwIfInvalid();
+    //
+    // Reported, not just thrown: TargetValidator raises no warnings today, but
+    // consuming a ValidationResult two different ways in one method is how the
+    // dropped-warning bug got in, and the next validator to grow one would
+    // inherit it here.
+    _report(const TargetValidator().validate(targetDir), onWarning);
 
     _write(archive, manifest, targetDir, resolved, onWarning);
 
@@ -129,16 +139,7 @@ class Unbundler implements UnbundlerBase {
     VariableResolver? resolver,
     void Function(String message)? onWarning,
   ) {
-    // Every phase reports its warnings before its errors can abort the run.
-    // Dropping them — which this method did, by calling throwIfInvalid alone —
-    // meant an unpacked template could carry a MANIFEST_UNUSED_VARIABLE that
-    // only ever reached whoever packed it.
-    void report(ValidationResult result) {
-      for (final warning in result.warnings) {
-        onWarning?.call(warning.toString());
-      }
-      result.throwIfInvalid();
-    }
+    void report(ValidationResult result) => _report(result, onWarning);
 
     report(const ArchiveValidator().validate(bytes));
     final archive = const ArchiveReader().read(bytes);
@@ -186,27 +187,87 @@ class Unbundler implements UnbundlerBase {
     final rules = _Rules(manifest, resolved);
     final renames = rules.renameAll(archive.files.keys);
 
+    // Whether the destination is ours to remove if this goes wrong. An unpack
+    // into an existing empty directory must not delete that directory; one
+    // that created it must not leave the debris behind.
+    final preexisting = Directory(targetDir).existsSync();
     final target = Directory(targetDir)..createSync(recursive: true);
+    final written = <String>[];
     final restoreExecutable = <String>[];
-    for (final entry in archive.files.entries) {
-      final outRel = renames[entry.key]!;
-      final outPath = p.join(target.path, outRel);
-      final out = File(outPath)..parent.createSync(recursive: true);
+    try {
+      for (final entry in archive.files.entries) {
+        final outRel = renames[entry.key]!;
+        // Absolute, so `chmod` cannot mistake a path for an option: GNU getopt
+        // permutes arguments, so a target directory named `-out` would make
+        // `chmod +x -out/x.sh` parse as flags and fail for the whole batch.
+        final outPath = p.absolute(p.join(target.path, outRel));
+        final out = File(outPath)..parent.createSync(recursive: true);
 
-      final decoded = rules.decodeForSubstitution(entry.key, entry.value);
-      if (decoded == null) {
-        out.writeAsBytesSync(entry.value);
-      } else {
-        out.writeAsBytesSync(
-          rules.encodeSubstituted(entry.value, rules.substitute(decoded)),
-        );
-      }
+        final decoded = rules.decodeForSubstitution(entry.key, entry.value);
+        if (decoded == null) {
+          out.writeAsBytesSync(entry.value);
+        } else {
+          out.writeAsBytesSync(
+            rules.encodeSubstituted(entry.value, rules.substitute(decoded)),
+          );
+        }
+        written.add(outPath);
 
-      if (archive.executable.contains(entry.key)) {
-        restoreExecutable.add(outPath);
+        if (archive.executable.contains(entry.key)) {
+          restoreExecutable.add(outPath);
+        }
       }
+    } on Object {
+      // A half-written project is worse than none: it is not runnable, and it
+      // makes the obvious retry fail with TARGET_OCCUPIED, so the user has to
+      // work out what to delete before they can try again.
+      _rollback(targetDir, written, preexisting: preexisting);
+      rethrow;
     }
     _makeExecutable(restoreExecutable, onWarning);
+  }
+
+  /// Emits [result]'s warnings to [onWarning], then throws if it holds errors.
+  ///
+  /// The one way this class consumes a [ValidationResult]. Calling
+  /// `throwIfInvalid` directly is what dropped every unpack-phase warning:
+  /// warnings do not block, so nothing failed and nothing was printed either.
+  static void _report(
+    ValidationResult result,
+    void Function(String message)? onWarning,
+  ) {
+    for (final warning in result.warnings) {
+      onWarning?.call(warning.toString());
+    }
+    result.throwIfInvalid();
+  }
+
+  /// Removes what a failed [_write] managed to create, best-effort.
+  ///
+  /// Only the files it wrote, and only the destination directory when this
+  /// unpack is what created it — deleting a directory the user already had
+  /// would turn a failed unpack into data loss. Failures here are swallowed:
+  /// the write error that triggered the rollback is the one worth reporting,
+  /// and masking it with a cleanup error would hide the cause.
+  static void _rollback(
+    String targetDir,
+    List<String> written, {
+    required bool preexisting,
+  }) {
+    try {
+      if (!preexisting) {
+        Directory(targetDir).deleteSync(recursive: true);
+        return;
+      }
+      for (final path in written) {
+        final file = File(path);
+        if (file.existsSync()) {
+          file.deleteSync();
+        }
+      }
+    } on FileSystemException {
+      // Best-effort.
+    }
   }
 
   /// Restores the owner-executable bit on [paths].

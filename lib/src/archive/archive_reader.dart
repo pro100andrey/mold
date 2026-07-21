@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:archive/archive.dart';
 
+import 'archive_codec.dart';
+
 /// The decoded contents of a template archive: the embedded manifest YAML and
 /// the captured project files (relative path under `files/` → bytes).
 class BundleArchive {
@@ -23,13 +25,19 @@ class BundleArchive {
 
 /// Reads a gzipped-tar template archive back into a [BundleArchive].
 class ArchiveReader {
-  const ArchiveReader();
+  const ArchiveReader({
+    this.maxDecompressedBytes = defaultMaxDecompressedBytes,
+  });
+
+  /// The ceiling on the decompressed archive. See [decodeGzipBounded].
+  final int maxDecompressedBytes;
 
   /// Decodes [bytes] (gzip + tar) into the embedded manifest and `files/` tree.
   ///
-  /// Throws a [FormatException] if the archive is missing `mold.yaml`.
+  /// Throws a [FormatException] if the archive is missing `mold.yaml`, and an
+  /// [ArchiveTooLargeException] if it expands past [maxDecompressedBytes].
   BundleArchive read(List<int> bytes) {
-    final tar = const GZipDecoder().decodeBytes(bytes);
+    final tar = decodeGzipBounded(bytes, maxBytes: maxDecompressedBytes);
     final archive = TarDecoder().decodeBytes(tar);
 
     String? manifestYaml;

@@ -207,8 +207,8 @@ class PackCommand extends Command<int> {
       return 1;
     }
 
-    // Non-null past the validator, which reports a missing directory.
-    final scan = scanned!;
+    // Falls back rather than asserting — see Bundler.bundle.
+    final scan = scanned ?? ProjectValidator.scanFor(sourceDir, manifest);
 
     _err.writeln(
       'Dry run — nothing written. ${scan.files.length} files would be '
@@ -243,11 +243,13 @@ class PackCommand extends Command<int> {
       manifest: manifest,
       onWarning: (message) => _err.writeln('Warning: $message'),
     );
+    // No onWarning here, deliberately: `bundle` above already ran the manifest
+    // phase and reported it. Passing one would print every manifest warning
+    // twice, because the planner validates the same manifest a second time.
     final plan = const Unbundler().plan(
       bytes: archive,
       vars: vars,
       resolver: const VariableResolver(noPrompt: true),
-      onWarning: (message) => _err.writeln('Warning: $message'),
     );
 
     _err.writeln('Preview — nothing written.');
@@ -472,7 +474,15 @@ Map<String, String> _parseVars(List<String> raw) {
     if (eq <= 0) {
       throw CliException("Invalid --var '$entry'; expected key=value.");
     }
-    out[entry.substring(0, eq)] = entry.substring(eq + 1);
+    final key = entry.substring(0, eq);
+    // Keeping the last silently discarded the first, which is the same class
+    // of quiet drop VARIABLE_UNKNOWN exists to prevent.
+    if (out.containsKey(key)) {
+      throw CliException(
+        "Repeated --var '$key'; it was given more than once. Pass it once.",
+      );
+    }
+    out[key] = entry.substring(eq + 1);
   }
 
   return out;

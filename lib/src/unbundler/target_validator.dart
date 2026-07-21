@@ -62,12 +62,20 @@ class TargetValidator extends ValidatorBase<String> {
   bool _canWrite(Directory dir) {
     final probe = File(p.join(dir.path, '.mold_write_probe'));
     try {
-      probe
-        ..writeAsStringSync('')
-        ..deleteSync();
-      return true;
+      probe.writeAsStringSync('');
     } on FileSystemException {
       return false;
     }
+    // Deleted in a separate step, and a failure here does not make the
+    // directory unwritable — the write above already proved it is. Leaving the
+    // probe behind would make the target non-empty, so the next run would
+    // report TARGET_OCCUPIED instead of the real problem.
+    try {
+      probe.deleteSync();
+    } on FileSystemException {
+      // Best-effort; the verdict stands on the write.
+    }
+
+    return true;
   }
 }

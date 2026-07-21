@@ -28,6 +28,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
   static const unknownTransform = 'MANIFEST_UNKNOWN_TRANSFORM';
   static const unknownVariable = 'MANIFEST_UNKNOWN_VARIABLE';
   static const unusedVariable = 'MANIFEST_UNUSED_VARIABLE';
+  static const duplicateSubstitution = 'MANIFEST_DUPLICATE_SUBSTITUTION';
 
   @override
   String get phase => 'manifest';
@@ -100,9 +101,39 @@ class ManifestValidator extends ValidatorBase<Manifest> {
       }
     }
 
-    issues.addAll(_checkTemplates(input, seen));
+    issues
+      ..addAll(_duplicates('extra_substitutions', input.extraSubstitutions))
+      ..addAll(_duplicates('path_renames', input.pathRenames))
+      ..addAll(_checkTemplates(input, seen));
 
     return ValidationResult(issues);
+  }
+
+  /// Entries within one section that share a `from`.
+  ///
+  /// Rendering keys the replacement table by `from`, so a repeated one means
+  /// the later entry wins and the earlier never runs — a rule the author wrote
+  /// and the tool silently ignored.
+  ///
+  /// Deliberately per-section, not across both: the two sections build
+  /// separate tables, and a `from` appearing in each is the documented idiom
+  /// for renaming a literal in content while pinning it in paths.
+  static List<ValidationError> _duplicates(
+    String section,
+    List<Substitution> entries,
+  ) {
+    final seen = <String>{};
+
+    return [
+      for (final entry in entries)
+        if (!seen.add(entry.from))
+          ValidationError(
+            duplicateSubstitution,
+            "Duplicate '$section' entry for '${entry.from}'. Only the last "
+            'would apply; the earlier one would never run.',
+            field: entry.from,
+          ),
+    ];
   }
 
   /// Checks every substitution template: syntax, transform names, and that

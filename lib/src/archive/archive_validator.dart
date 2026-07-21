@@ -3,18 +3,25 @@ import 'package:archive/archive.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
+import 'archive_codec.dart';
 import 'archive_path.dart';
 
 /// Validates raw archive bytes (unpack phase): a decodable gzip+tar that
 /// contains the embedded `mold.yaml` and a `files/` tree, and whose entries all
 /// stay inside that tree (no `..` traversal out of the target directory).
 class ArchiveValidator extends ValidatorBase<List<int>> {
-  const ArchiveValidator();
+  const ArchiveValidator({
+    this.maxDecompressedBytes = defaultMaxDecompressedBytes,
+  });
 
   static const invalid = 'ARCHIVE_INVALID';
   static const missingManifest = 'ARCHIVE_MISSING_MANIFEST';
   static const missingFiles = 'ARCHIVE_MISSING_FILES';
   static const unsafePath = 'ARCHIVE_UNSAFE_PATH';
+  static const tooLarge = 'ARCHIVE_TOO_LARGE';
+
+  /// The ceiling on the decompressed archive. See [decodeGzipBounded].
+  final int maxDecompressedBytes;
 
   @override
   String get phase => 'archive';
@@ -23,8 +30,13 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
   ValidationResult validate(List<int> input) {
     final Archive archive;
     try {
-      final tar = const GZipDecoder().decodeBytes(input);
+      final tar = decodeGzipBounded(input, maxBytes: maxDecompressedBytes);
       archive = TarDecoder().decodeBytes(tar);
+    } on ArchiveTooLargeException catch (e) {
+      // Its own code rather than ARCHIVE_INVALID: the archive is well-formed,
+      // which is precisely what makes it dangerous, and "not a valid gzipped
+      // tar" would send the reader looking for corruption that is not there.
+      return ValidationResult([ValidationError(tooLarge, e.message)]);
     } on Object {
       return ValidationResult([
         const ValidationError(invalid, 'Not a valid gzipped tar archive.'),
