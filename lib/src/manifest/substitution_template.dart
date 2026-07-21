@@ -224,7 +224,7 @@ class SubstitutionTemplate {
       );
       return null;
     }
-    
+
     return PlaceholderSegment(name, transform);
   }
 }
