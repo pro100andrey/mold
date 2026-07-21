@@ -32,7 +32,7 @@ class EmbedSource {
         ..write('${archive[i]},')
         ..write((i + 1) % 16 == 0 ? '\n  ' : ' ');
     }
-    
+
     return (buffer
           ..writeln()
           ..writeln('];'))

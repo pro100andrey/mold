@@ -46,14 +46,50 @@ mold pack <source_dir> [options]
                                               ./<name>.dart for embed formats)
   --name,     -n   Output file name stem      (overrides the manifest name)
   --format,   -f   tar.gz | bytes | base64    (default: tar.gz)
+  --dry-run        Validate and list what would be captured, without writing
 
 mold unpack <source> [options]
   --target,   -t   Destination dir            (default: ./<source-stem>)
   --var,      -v   key=value                  (repeatable)
   --no-prompt      Use only --var + manifest defaults; never prompt
+  --dry-run        Show what would be written, without writing it
+  --diff           Also show a unified diff (implies --dry-run)
 ```
 
 Run `mold help pack` / `mold help unpack` for the full option list.
+
+## Previewing a rename
+
+```sh
+mold unpack super_server.mold -t ./my_project --dry-run
+```
+
+```text
+Dry run — nothing written to ./my_project.
+  138 files: 3 renamed, 18 rewritten (50 replacements), 118 unchanged.
+
+Renamed:
+  android/.../com/example/super_server/MainActivity.kt  ->  .../my_project/MainActivity.kt  (1)
+  super_server.iml  ->  my_project.iml
+
+Rewritten:
+  pubspec.yaml  (1)
+  macos/Runner.xcodeproj/project.pbxproj  (13)
+```
+
+Add `--diff` for the content changes as a unified diff. Unchanged files are
+counted but not listed — a template is mostly unchanged files, and listing them
+buries the ones that matter.
+
+The preview runs the same validation, variable resolution and substitution
+rules as a real unpack, so it cannot disagree with one; it is that computation
+minus the writes. The target directory is validated too, so a dry run also
+tells you the destination is usable.
+
+`mold pack --dry-run` is a preflight rather than a preview: packing substitutes
+nothing, so there is nothing to diff. It reports which files would be captured,
+which symlinks were skipped and why, and whether each `replaces` token is
+distinctive enough.
 
 ## Interpolation in substitutions
 

@@ -5,12 +5,16 @@ import 'package:args/command_runner.dart';
 import 'package:path/path.dart' as p;
 
 import '../bundler/bundler.dart';
+import '../bundler/file_scanner.dart';
+import '../bundler/project_validator.dart';
 import '../manifest/manifest.dart';
 import '../output/embed_source.dart';
 import '../output/output_format.dart';
+import '../output/unified_diff.dart';
 import '../prompt/variable_prompter.dart';
 import '../prompt/variable_resolver.dart';
 import '../unbundler/unbundler.dart';
+import '../unbundler/unpack_plan.dart';
 import '../validation/validation_result.dart';
 
 /// Thrown for user-facing CLI errors (bad args, missing files). The runner
@@ -84,6 +88,11 @@ class PackCommand extends Command<int> {
         allowed: OutputFormat.values.map((f) => f.flag),
         defaultsTo: OutputFormat.tarGz.flag,
         help: 'Output format: tar.gz file, or an embeddable Dart source.',
+      )
+      ..addFlag(
+        'dry-run',
+        negatable: false,
+        help: 'Validate and list what would be captured, without writing.',
       );
   }
 
@@ -111,6 +120,10 @@ class PackCommand extends Command<int> {
           (results['manifest'] as String?) ?? _defaultManifestPath(sourceDir);
       final manifest = Manifest.fromFile(manifestPath);
       final format = OutputFormat.fromFlag(results['format'] as String);
+
+      if (results['dry-run'] as bool) {
+        return _dryRunPack(sourceDir, manifest);
+      }
 
       final archive = await const Bundler().bundle(
         projectDir: sourceDir,
@@ -141,6 +154,41 @@ class PackCommand extends Command<int> {
       _err.writeln(e.message);
       return 1;
     }
+  }
+
+  /// Validates and reports what a pack would capture, without writing.
+  ///
+  /// A preflight rather than a preview of substitution: packing performs no
+  /// substitution at all, so there is nothing to diff. What it can tell you is
+  /// whether the manifest is right — which files land in the template, which
+  /// symlinks were left out and why, and whether every `replaces` token is
+  /// distinctive enough to be safe.
+  int _dryRunPack(String sourceDir, Manifest manifest) {
+    final result = const ProjectValidator().validate(
+      ProjectInput(dir: sourceDir, manifest: manifest),
+    );
+    for (final warning in result.warnings) {
+      _err.writeln('Warning: $warning');
+    }
+    if (!result.isValid) {
+      _err.writeln(ValidationException(result.errors).toString());
+      return 1;
+    }
+
+    final scan = FileScanner(
+      include: manifest.include,
+      exclude: manifest.exclude,
+    ).scan(sourceDir);
+
+    _err.writeln(
+      'Dry run — nothing written. ${scan.files.length} files would be '
+      'captured, ${scan.skippedLinks.length} symlinks skipped.',
+    );
+    for (final rel in scan.files) {
+      _err.writeln('  $rel');
+    }
+
+    return 0;
   }
 
   /// Renders the archive into the bytes to write for [format]: raw archive for
@@ -188,6 +236,16 @@ class UnpackCommand extends Command<int> {
         'no-prompt',
         negatable: false,
         help: 'Never prompt; use --var values and manifest defaults only.',
+      )
+      ..addFlag(
+        'dry-run',
+        negatable: false,
+        help: 'Show what would be written, without writing it.',
+      )
+      ..addFlag(
+        'diff',
+        negatable: false,
+        help: 'With --dry-run, also show a unified diff of the changes.',
       );
   }
 
@@ -223,6 +281,27 @@ class UnpackCommand extends Command<int> {
         prompter: VariablePrompter(_err, stdin.readLineSync),
       );
 
+      final showDiff = results['diff'] as bool;
+      // --diff implies --dry-run: there is no such thing as diffing a write
+      // that already happened, so the combination cannot be invalid.
+      if (showDiff || results['dry-run'] as bool) {
+        final file = File(source);
+        if (!file.existsSync()) {
+          throw FormatException('Archive not found: $source');
+        }
+        _printPlan(
+          const Unbundler().plan(
+            bytes: file.readAsBytesSync(),
+            targetDir: targetDir,
+            vars: vars,
+            resolver: resolver,
+          ),
+          targetDir,
+          showDiff: showDiff,
+        );
+        return 0;
+      }
+
       await const Unbundler().unbundleFile(
         source: source,
         targetDir: targetDir,
@@ -244,6 +323,67 @@ class UnpackCommand extends Command<int> {
     }
   }
 
+  /// Prints what an unpack would do: a summary, the renames, the per-file
+  /// replacement counts, and optionally a unified diff of each change.
+  ///
+  /// Files nothing happens to are counted but not listed — a template is
+  /// mostly unchanged files, and listing them buries the ones that matter.
+  void _printPlan(UnpackPlan plan, String targetDir, {required bool showDiff}) {
+    final renamed = plan.renamed.toList();
+    final rewritten = plan.rewritten.toList();
+
+    _err
+      ..writeln('Dry run — nothing written to $targetDir.')
+      ..writeln(
+        '  ${plan.files.length} files: ${renamed.length} renamed, '
+        '${rewritten.length} rewritten (${plan.totalReplacements} '
+        'replacements), ${plan.untouched.length} unchanged.',
+      );
+
+    if (renamed.isNotEmpty) {
+      _err.writeln('\nRenamed:');
+      for (final f in renamed) {
+        final count = f.replacements > 0 ? '  (${f.replacements})' : '';
+        _err.writeln('  ${f.from}  ->  ${f.to}$count');
+      }
+    }
+
+    final contentOnly = rewritten.where((f) => !f.renamed).toList();
+    if (contentOnly.isNotEmpty) {
+      _err.writeln('\nRewritten:');
+      for (final f in contentOnly) {
+        _err.writeln('  ${f.to}  (${f.replacements})');
+      }
+    }
+
+    if (!showDiff) {
+      if (rewritten.isNotEmpty) {
+        _err.writeln('\nRe-run with --diff to see the content changes.');
+      }
+      return;
+    }
+
+    const differ = UnifiedDiff();
+    for (final f in rewritten) {
+      final before = f.before;
+      final after = f.after;
+      if (before == null || after == null) {
+        continue;
+      }
+      final rendered = differ.render(
+        before: before,
+        after: after,
+        fromLabel: f.from,
+        toLabel: f.to,
+      );
+      if (rendered.isNotEmpty) {
+        _err
+          ..writeln()
+          ..write(rendered);
+      }
+    }
+  }
+
   /// Parses repeated `key=value` pairs into a map. Splits on the first `=`.
   Map<String, String> _parseVars(List<String> raw) {
     final out = <String, String>{};
@@ -254,7 +394,7 @@ class UnpackCommand extends Command<int> {
       }
       out[entry.substring(0, eq)] = entry.substring(eq + 1);
     }
-    
+
     return out;
   }
 }

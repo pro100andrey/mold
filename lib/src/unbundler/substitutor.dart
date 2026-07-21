@@ -20,7 +20,7 @@ class Substitutor {
     if (pattern == null) {
       return input;
     }
-    
+
     return input.replaceAllMapped(pattern, (m) => _table[m[0]!]!);
   }
 

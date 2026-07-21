@@ -53,7 +53,7 @@ class FileClassifier {
   /// Lowercases and strips a leading dot from an extension token.
   static String _normalize(String ext) {
     final lower = ext.toLowerCase();
-    
+
     return lower.startsWith('.') ? lower.substring(1) : lower;
   }
 }

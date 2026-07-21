@@ -50,13 +50,11 @@ class UnpackPlan {
   Iterable<PlannedFile> get renamed => files.where((f) => f.renamed);
 
   /// Files whose content changes.
-  Iterable<PlannedFile> get rewritten =>
-      files.where((f) => f.replacements > 0);
+  Iterable<PlannedFile> get rewritten => files.where((f) => f.replacements > 0);
 
   /// Files nothing happens to.
   Iterable<PlannedFile> get untouched => files.where((f) => !f.changed);
 
   /// Total substitutions across every file.
-  int get totalReplacements =>
-      files.fold(0, (sum, f) => sum + f.replacements);
+  int get totalReplacements => files.fold(0, (sum, f) => sum + f.replacements);
 }

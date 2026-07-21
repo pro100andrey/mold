@@ -219,6 +219,99 @@ variables:
       expect(err.text, contains('org'));
     });
 
+    test('unpack --dry-run reports the plan and writes nothing', () async {
+      File(p.join(project.path, 'mold.yaml')).writeAsStringSync('''
+name: super_server
+version: 1.0.0
+variables:
+  project_name:
+    default: my_project
+    replaces: super_server
+''');
+      File(
+        p.join(project.path, 'main.dart'),
+      ).writeAsStringSync('// super_server\n');
+
+      final archive = p.join(tmp.path, 'out.mold');
+      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+
+      final target = p.join(tmp.path, 'never_created');
+      final err = _Sink();
+      final code = await runBundleCli([
+        'unpack',
+        archive,
+        '-t',
+        target,
+        '--var',
+        'project_name=my_project',
+        '--no-prompt',
+        '--dry-run',
+      ], err: err);
+
+      expect(code, 0);
+      expect(err.text, contains('Dry run'));
+      expect(err.text, contains('main.dart'));
+      expect(
+        Directory(target).existsSync(),
+        isFalse,
+        reason: 'a dry run must not create the target',
+      );
+    });
+
+    test('unpack --diff shows the content change', () async {
+      File(p.join(project.path, 'mold.yaml')).writeAsStringSync('''
+name: super_server
+version: 1.0.0
+variables:
+  project_name:
+    default: my_project
+    replaces: super_server
+''');
+      File(
+        p.join(project.path, 'main.dart'),
+      ).writeAsStringSync('// super_server\n');
+
+      final archive = p.join(tmp.path, 'out.mold');
+      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+
+      final err = _Sink();
+      final code = await runBundleCli([
+        'unpack',
+        archive,
+        '-t',
+        p.join(tmp.path, 'nope'),
+        '--var',
+        'project_name=my_project',
+        '--no-prompt',
+        '--diff',
+      ], err: err);
+
+      expect(code, 0);
+      // --diff implies --dry-run, so the plan is printed too.
+      expect(err.text, contains('Dry run'));
+      expect(err.text, contains('-// super_server'));
+      expect(err.text, contains('+// my_project'));
+    });
+
+    test('pack --dry-run lists the capture and writes no archive', () async {
+      writeManifest();
+      final out = p.join(tmp.path, 'never.mold');
+      final err = _Sink();
+
+      final code = await runBundleCli([
+        'pack',
+        project.path,
+        '-o',
+        out,
+        '--dry-run',
+      ], err: err);
+
+      expect(code, 0);
+      expect(err.text, contains('Dry run'));
+      expect(err.text, contains('main.dart'));
+      expect(File(out).existsSync(), isFalse);
+    });
+
     test('unpack with a malformed --var errors with code 64', () async {
       final archive = p.join(tmp.path, 'out.mold');
       writeManifest();

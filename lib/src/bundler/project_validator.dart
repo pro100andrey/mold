@@ -211,9 +211,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       extraBinary: manifest.binaryExtensions.toSet(),
     );
     final manifestPath = manifest.path;
-    final excluded = manifestPath == null
-        ? null
-        : p.canonicalize(manifestPath);
+    final excluded = manifestPath == null ? null : p.canonicalize(manifestPath);
 
     for (final rel in relPaths) {
       if (excluded != null && p.canonicalize(p.join(dir, rel)) == excluded) {

@@ -66,7 +66,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
           ),
         );
       }
-      
+
       final replaces = variable.replaces;
       if (replaces != null &&
           replaces.isNotEmpty &&

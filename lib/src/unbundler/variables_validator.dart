@@ -64,7 +64,7 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
         );
       }
     }
-    
+
     return ValidationResult(issues);
   }
 }

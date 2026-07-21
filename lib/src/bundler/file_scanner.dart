@@ -152,13 +152,12 @@ class FileScanner {
 
   /// Classifies a failed link resolution. ENOENT is 2 everywhere; ELOOP is 40
   /// on Linux and 62 on macOS.
-  SkipReason _resolutionFailure(FileSystemException e) => switch (e
-      .osError
-      ?.errorCode) {
-    2 => SkipReason.dangling,
-    40 || 62 => SkipReason.circular,
-    _ => SkipReason.unresolvable,
-  };
+  SkipReason _resolutionFailure(FileSystemException e) =>
+      switch (e.osError?.errorCode) {
+        2 => SkipReason.dangling,
+        40 || 62 => SkipReason.circular,
+        _ => SkipReason.unresolvable,
+      };
 
   /// Whether [path] is owner-executable. Follows links, so a dereferenced
   /// link reports its target's mode.
