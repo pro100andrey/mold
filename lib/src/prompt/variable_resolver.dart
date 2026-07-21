@@ -7,9 +7,10 @@ import 'variable_prompter.dart';
 /// 2. under [noPrompt], the manifest `default` (never blocks on input);
 /// 3. otherwise an interactive prompt via [prompter].
 ///
-/// With neither a prompter nor [noPrompt] (a non-interactive library call),
-/// an unresolved variable falls back to its default or, lacking one, is left
-/// out of the result for `VariablesValidator` to report.
+/// Any of those can fail to produce a value — including the prompt, when
+/// stdin is at end of input. An unresolved variable falls back to its default
+/// or, lacking one, is left out of the result for `VariablesValidator` to
+/// report as `VARIABLE_MISSING`.
 class VariableResolver {
   const VariableResolver({this.prompter, this.noPrompt = false});
 
