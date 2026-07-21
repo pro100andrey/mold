@@ -265,15 +265,29 @@ error-severity issue is present; warnings never block.
 | Phase  | Validator            | Checks                                                                                                        |
 | ------ | -------------------- | ------------------------------------------------------------------------------------------------------------- |
 | pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, usable `replaces` tokens, well-formed `{{ }}` templates |
-| pack   | `ProjectValidator`   | dir has files to pack, each `replaces` token occurs; warns on overlap and skipped links                       |
+| pack   | `ProjectValidator`   | dir has files to pack; each `replaces` token occurs and is distinctive enough                                 |
 | unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree, no entry escapes the target                         |
 | unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                                          |
 | unpack | `TargetValidator`    | parent exists, destination free, writable                                                                     |
 | unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token                                       |
 
+The CLI maps these to exit codes: `0` ok, `1` validation / IO / format
+failure, `64` usage error. Warnings print to stderr and never block.
+
+A `replaces` token is measured, not just located. `ProjectValidator` counts how
+often each derived casing occurs and how much of that sits inside longer words:
+at or above 30% it refuses to pack (`PROJECT_TOKEN_TOO_GENERIC`, naming the
+worst offenders), at or above 5% it warns. `app` in a Flutter project measures
+75% — `application`, `apple`, `AppIcon` — and is refused; a project named after
+itself measures ~14% and only warns. When a token is too generic, the way
+forward is explicit `extra_substitutions` rather than a blunter rename.
+
+The manifest file itself is excluded from that search: a `replaces:` line is a
+declaration, not evidence the project uses the token.
+
 Order — pack: `Manifest → Project`; unpack:
 `Archive → Manifest → Target → Variables`. The first failing phase aborts before
-the next runs. The CLI maps a `ValidationException` to exit code `1`.
+the next runs.
 
 `ProjectValidator` checks the files the pack will actually capture — the
 `include` / `exclude` globs apply to validation too, so a token that occurs only
