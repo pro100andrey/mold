@@ -62,6 +62,7 @@ class Bundler implements BundlerBase {
     final scanner = FileScanner(
       include: manifest.include,
       exclude: manifest.exclude,
+      useGitignore: manifest.useGitignore,
     );
     final scan = scanner.scan(projectDir);
 

@@ -178,11 +178,13 @@ class PackCommand extends Command<int> {
     final scan = FileScanner(
       include: manifest.include,
       exclude: manifest.exclude,
+      useGitignore: manifest.useGitignore,
     ).scan(sourceDir);
 
     _err.writeln(
       'Dry run — nothing written. ${scan.files.length} files would be '
-      'captured, ${scan.skippedLinks.length} symlinks skipped.',
+      'captured, ${scan.gitignored} gitignored, '
+      '${scan.skippedLinks.length} symlinks skipped.',
     );
     for (final rel in scan.files) {
       _err.writeln('  $rel');

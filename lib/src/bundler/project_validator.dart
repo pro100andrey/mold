@@ -102,6 +102,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
     final scan = FileScanner(
       include: input.manifest.include,
       exclude: input.manifest.exclude,
+      useGitignore: input.manifest.useGitignore,
     ).scan(input.dir);
     // Built before the empty check: when every file turned out to be a skipped
     // symlink, these warnings are the explanation for the error below.

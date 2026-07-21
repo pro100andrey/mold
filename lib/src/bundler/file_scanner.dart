@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:glob/glob.dart';
 import 'package:path/path.dart' as p;
 
+import 'gitignore.dart';
+
 /// Why a symlink that matched the filters was not packed.
 ///
 /// A code rather than a sentence, so callers can tell the cases apart and
@@ -38,6 +40,7 @@ class ScanResult {
     required this.files,
     required this.executable,
     required this.skippedLinks,
+    this.gitignored = 0,
   });
 
   /// Relative paths to pack, sorted for deterministic archives.
@@ -52,6 +55,10 @@ class ScanResult {
   /// Reported as warnings by `ProjectValidator` — a dropped file must never
   /// be silent.
   final Map<String, SkipReason> skippedLinks;
+
+  /// How many files the project's `.gitignore` rules excluded. Reported by
+  /// `mold pack --dry-run` so an implicit default stays inspectable.
+  final int gitignored;
 }
 
 /// Walks a source directory and applies `include` / `exclude` glob filters,
@@ -70,11 +77,19 @@ class FileScanner {
   FileScanner({
     List<String> include = const [],
     List<String> exclude = const [],
+    this.useGitignore = false,
   }) : _include = include.map(Glob.new).toList(growable: false),
        _exclude = exclude.map(Glob.new).toList(growable: false);
 
   final List<Glob> _include;
   final List<Glob> _exclude;
+
+  /// Whether the project's `.gitignore` files also exclude files.
+  ///
+  /// Defaults to false here — a bare `FileScanner` filters by nothing but its
+  /// globs. `Bundler` passes the manifest's `use_gitignore`, which defaults to
+  /// true.
+  final bool useGitignore;
 
   /// Scans [sourceDir]. An empty include set means "all files".
   ScanResult scan(String sourceDir) {
@@ -84,9 +99,14 @@ class FileScanner {
     // containment check below fail.
     final canonicalRoot = root.resolveSymbolicLinksSync();
 
+    final ignored = useGitignore
+        ? GitignoreRules.load(sourceDir)
+        : const GitignoreRules.empty();
+
     final matches = <String>[];
     final executable = <String>{};
     final skipped = <String, SkipReason>{};
+    var gitignored = 0;
     for (final entity in root.listSync(recursive: true, followLinks: false)) {
       // Type first: directories are neither packed nor reported, so matching
       // them against every glob is pure waste.
@@ -97,6 +117,10 @@ class FileScanner {
 
       final rel = _relative(entity.path, sourceDir);
       if (!_isIncluded(rel) || _isExcluded(rel)) {
+        continue;
+      }
+      if (ignored.isIgnored(rel)) {
+        gitignored++;
         continue;
       }
 
@@ -121,6 +145,7 @@ class FileScanner {
       files: matches,
       executable: executable,
       skippedLinks: skipped,
+      gitignored: gitignored,
     );
   }
 

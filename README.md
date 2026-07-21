@@ -19,6 +19,12 @@ mold unpack ./super_server.mold --var project_name=my_project
                                                     binaries copied as-is)
 ```
 
+`pack` honours the project's own `.gitignore` files — all of them, including
+the nested per-platform ones — so a manifest does not restate `.dart_tool/**`,
+`build/**` and friends. `exclude` applies on top: a file is packed only if it
+passes `include`, passes `exclude`, and is not gitignored. `.git/` is never
+packed. `mold pack --dry-run` reports how many files each rule removed.
+
 `pack` reads the source but never mutates it. `unpack` resolves each variable,
 generates all four casings of every `replaces` token, rewrites paths and text
 file contents, and copies binary / `no_substitute` files byte-for-byte. The
@@ -147,9 +153,13 @@ version: 1.0.0
 # Empty `include` means "everything".
 include:
   - "**"
+# The project's own .gitignore files already exclude derived state, and are
+# honoured by default. Set to false to pack the tree exactly as it sits.
+use_gitignore: true
+# Applied on top, for what git has no opinion about.
 exclude:
-  - build/**
-  - .dart_tool/**
+  - pubspec.lock
+  - mold.yaml
 
 # Rename rules. Each variable derives all four casings from one `replaces`
 # token: snake_case, PascalCase, kebab-case, SCREAMING_SNAKE.

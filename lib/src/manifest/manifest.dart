@@ -103,6 +103,7 @@ class Manifest {
     this.pathRenames = const [],
     this.noSubstitute = const [],
     this.binaryExtensions = const [],
+    this.useGitignore = true,
     this.source,
     this.path,
   });
@@ -129,6 +130,7 @@ class Manifest {
       pathRenames: _substitutions(doc['path_renames'], 'path_renames'),
       noSubstitute: _stringList(doc['no_substitute']),
       binaryExtensions: _stringList(doc['binary_extensions']),
+      useGitignore: doc['use_gitignore'] as bool? ?? true,
       source: text,
       path: path,
     );
@@ -180,6 +182,20 @@ class Manifest {
   /// Extra extensions treated as binary, on top of the built-in set.
   final List<String> binaryExtensions;
 
+  /// Whether the project's own `.gitignore` files also exclude files from the
+  /// template. Defaults to true.
+  ///
+  /// A project already declares what is derived rather than authored, and
+  /// repeating `.dart_tool/**`, `build/**` and friends in every manifest is
+  /// duplication that goes stale. `exclude` still applies on top, for the
+  /// decisions git has no opinion about — a lockfile you do not want
+  /// scaffolded, the manifest itself.
+  ///
+  /// The two are ANDed: a file is packed only if it passes `include`, passes
+  /// `exclude`, and is not gitignored. Set this to false to pack a project
+  /// exactly as it sits on disk.
+  final bool useGitignore;
+
   /// The verbatim YAML this manifest was parsed from, when available. Embedded
   /// into the archive as `mold.yaml`.
   final String? source;
@@ -227,7 +243,8 @@ class Manifest {
       _listEquals(other.extraSubstitutions, extraSubstitutions) &&
       _listEquals(other.pathRenames, pathRenames) &&
       _listEquals(other.noSubstitute, noSubstitute) &&
-      _listEquals(other.binaryExtensions, binaryExtensions);
+      _listEquals(other.binaryExtensions, binaryExtensions) &&
+      other.useGitignore == useGitignore;
 
   @override
   int get hashCode => Object.hash(
@@ -240,6 +257,7 @@ class Manifest {
     Object.hashAll(pathRenames),
     Object.hashAll(noSubstitute),
     Object.hashAll(binaryExtensions),
+    useGitignore,
   );
 
   /// Field-by-field, so a failed round-trip assertion names the field that
@@ -250,7 +268,8 @@ class Manifest {
       'exclude: $exclude, variables: $variables, '
       'extraSubstitutions: $extraSubstitutions, '
       'pathRenames: $pathRenames, '
-      'noSubstitute: $noSubstitute, binaryExtensions: $binaryExtensions)';
+      'noSubstitute: $noSubstitute, binaryExtensions: $binaryExtensions, '
+      'useGitignore: $useGitignore)';
 
   /// Renders this manifest back to YAML, for embedding a manifest that was
   /// built in code rather than read from a file (where [source] is null).
@@ -293,6 +312,9 @@ class Manifest {
     _writeSubstitutions(buffer, 'extra_substitutions', extraSubstitutions);
     _writeSubstitutions(buffer, 'path_renames', pathRenames);
 
+    if (!useGitignore) {
+      buffer.writeln('use_gitignore: false');
+    }
     _writeList(buffer, 'no_substitute', noSubstitute);
     _writeList(buffer, 'binary_extensions', binaryExtensions);
 
