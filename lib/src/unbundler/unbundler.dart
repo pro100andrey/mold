@@ -128,10 +128,11 @@ class Unbundler implements UnbundlerBase {
   /// Writes [archive]'s `files/` tree into [targetDir] with substitution, using
   /// the parsed [manifest] and already-[resolved] variable values.
   ///
-  /// Paths are rewritten with the variable-derived renames only; text content
-  /// also gets the manifest's literal `extra_substitutions`. Binary files (by
-  /// extension, including `binary_extensions`) and `no_substitute` matches are
-  /// copied byte-for-byte — though their path is still renamed.
+  /// Paths get the variable-derived renames plus `path_renames`; text content
+  /// gets the renames plus `extra_substitutions`. The two lists are the only
+  /// asymmetry — each reaches exactly one side. Binary files (by extension,
+  /// including `binary_extensions`) and `no_substitute` matches are copied
+  /// byte-for-byte — though their path is still renamed.
   void _write(
     BundleArchive archive,
     Manifest manifest,
@@ -140,7 +141,13 @@ class Unbundler implements UnbundlerBase {
     void Function(String message)? onWarning,
   ) {
     final renames = _buildTable(manifest, resolved);
-    final pathSubstitutor = Substitutor(renames);
+    // Paths get the renames plus any explicit path_renames. Longest-first
+    // matching is what makes the identity idiom work: `android/app/ ->
+    // android/app/` pins that path against the shorter `app` rename key.
+    final pathSubstitutor = Substitutor({
+      ...renames,
+      ..._render(manifest.pathRenames, resolved),
+    });
     // Templates are rendered *before* the table is built, so the result enters
     // the same single-pass longest-first match as the renames. That ordering
     // is required, not incidental: `from: super_server.dev` (16 chars) must

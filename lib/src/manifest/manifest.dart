@@ -100,6 +100,7 @@ class Manifest {
     this.exclude = const [],
     this.variables = const [],
     this.extraSubstitutions = const [],
+    this.pathRenames = const [],
     this.noSubstitute = const [],
     this.binaryExtensions = const [],
     this.source,
@@ -121,7 +122,11 @@ class Manifest {
       include: _stringList(doc['include']),
       exclude: _stringList(doc['exclude']),
       variables: _variables(doc['variables']),
-      extraSubstitutions: _substitutions(doc['extra_substitutions']),
+      extraSubstitutions: _substitutions(
+        doc['extra_substitutions'],
+        'extra_substitutions',
+      ),
+      pathRenames: _substitutions(doc['path_renames'], 'path_renames'),
       noSubstitute: _stringList(doc['no_substitute']),
       binaryExtensions: _stringList(doc['binary_extensions']),
       source: text,
@@ -157,6 +162,18 @@ class Manifest {
   /// Literal `from`/`to` replacements applied to text content at unpack time.
   final List<Substitution> extraSubstitutions;
 
+  /// `from`/`to` replacements applied to file and directory **paths** only.
+  ///
+  /// The mirror of [extraSubstitutions], for when a token must be renamed in
+  /// some paths but preserved in others: a Flutter project's `android/app/` is
+  /// a fixed Gradle module path while `kotlin/com/example/app/` is the package
+  /// and must move. One literal, opposite treatment — which a `replaces` token
+  /// cannot express, because it rewrites both.
+  ///
+  /// Matching is longest-first, so an entry mapping a path to itself pins it
+  /// against a shorter rename key.
+  final List<Substitution> pathRenames;
+
   /// Glob patterns of text files copied verbatim (no content substitution).
   final List<String> noSubstitute;
 
@@ -189,6 +206,7 @@ class Manifest {
   /// field is added here, beside its declaration.
   Map<String, String> get replacementTemplates => {
     for (final s in extraSubstitutions) s.from: s.to,
+    for (final s in pathRenames) s.from: s.to,
   };
 
   /// Equality over the declared content, so a round trip through [toYaml] can
@@ -207,6 +225,7 @@ class Manifest {
       _listEquals(other.exclude, exclude) &&
       _listEquals(other.variables, variables) &&
       _listEquals(other.extraSubstitutions, extraSubstitutions) &&
+      _listEquals(other.pathRenames, pathRenames) &&
       _listEquals(other.noSubstitute, noSubstitute) &&
       _listEquals(other.binaryExtensions, binaryExtensions);
 
@@ -218,6 +237,7 @@ class Manifest {
     Object.hashAll(exclude),
     Object.hashAll(variables),
     Object.hashAll(extraSubstitutions),
+    Object.hashAll(pathRenames),
     Object.hashAll(noSubstitute),
     Object.hashAll(binaryExtensions),
   );
@@ -229,6 +249,7 @@ class Manifest {
       'Manifest(name: $name, version: $version, include: $include, '
       'exclude: $exclude, variables: $variables, '
       'extraSubstitutions: $extraSubstitutions, '
+      'pathRenames: $pathRenames, '
       'noSubstitute: $noSubstitute, binaryExtensions: $binaryExtensions)';
 
   /// Renders this manifest back to YAML, for embedding a manifest that was
@@ -269,19 +290,30 @@ class Manifest {
       }
     }
 
-    if (extraSubstitutions.isNotEmpty) {
-      buffer.writeln('extra_substitutions:');
-      for (final s in extraSubstitutions) {
-        buffer
-          ..writeln('  - from: ${_scalar(s.from)}')
-          ..writeln('    to: ${_scalar(s.to)}');
-      }
-    }
+    _writeSubstitutions(buffer, 'extra_substitutions', extraSubstitutions);
+    _writeSubstitutions(buffer, 'path_renames', pathRenames);
 
     _writeList(buffer, 'no_substitute', noSubstitute);
     _writeList(buffer, 'binary_extensions', binaryExtensions);
 
     return buffer.toString();
+  }
+
+  /// Emits a `from`/`to` section. Shared so the two cannot drift apart.
+  static void _writeSubstitutions(
+    StringBuffer buffer,
+    String key,
+    List<Substitution> items,
+  ) {
+    if (items.isEmpty) {
+      return;
+    }
+    buffer.writeln('$key:');
+    for (final s in items) {
+      buffer
+        ..writeln('  - from: ${_scalar(s.from)}')
+        ..writeln('    to: ${_scalar(s.to)}');
+    }
   }
 
   static void _writeList(StringBuffer buffer, String key, List<String> items) {
@@ -360,35 +392,34 @@ class Manifest {
     );
   }
 
-  static List<Substitution> _substitutions(Object? value) {
+  /// Parses a `from`/`to` list. [key] names the section in error messages.
+  static List<Substitution> _substitutions(Object? value, String key) {
     if (value == null) {
       return const [];
     }
 
     if (value is! YamlList) {
-      throw const FormatException("'extra_substitutions' must be a list.");
+      throw FormatException("'$key' must be a list.");
     }
 
-    return [for (final item in value) _substitution(item)];
+    return [for (final item in value) _substitution(item, key)];
   }
 
-  static Substitution _substitution(Object? item) {
+  static Substitution _substitution(Object? item, String key) {
     if (item is! YamlMap) {
-      throw const FormatException(
-        'Each extra_substitution must be a mapping with from/to.',
-      );
+      throw FormatException('Each $key entry must be a mapping with from/to.');
     }
 
     final from = item['from'];
     final to = item['to'];
     if (from is! String || from.isEmpty) {
-      throw const FormatException("extra_substitution 'from' is required.");
+      throw FormatException("A $key entry needs a non-empty 'from'.");
     }
 
     if (to is! String) {
-      throw const FormatException("extra_substitution 'to' is required.");
+      throw FormatException("A $key entry needs a 'to'.");
     }
-    
+
     return Substitution(from: from, to: to);
   }
 }

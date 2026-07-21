@@ -24,8 +24,9 @@ generates all four casings of every `replaces` token, rewrites paths and text
 file contents, and copies binary / `no_substitute` files byte-for-byte. The
 archive is materialized in memory — no scratch directory is written to disk.
 
-The owner-executable bit is carried through the archive, so a template's
-scripts and hooks stay runnable. A file whose extension says text but whose
+The owner-executable bit and a leading UTF-8 BOM are both carried through, so
+a template's scripts stay runnable and its Windows-authored files keep their
+encoding marker. A file whose extension says text but whose
 bytes are not valid UTF-8 is copied verbatim rather than failing the unpack.
 
 A symlink pointing at a file **inside** the source dir is packed as its
@@ -83,6 +84,13 @@ Whitespace inside the braces is insignificant. Chaining (`{{ a | x | y }}`) is
 refused rather than read as a transform named `x | y`. A variable declared
 without `replaces` exists precisely to be interpolated.
 
+`extra_substitutions` reaches **content** only and `path_renames` reaches
+**paths** only; `replaces` reaches both. That is the whole model. When one
+literal needs opposite treatment in different places — Flutter's `android/app/`
+is a fixed Gradle module while `kotlin/com/example/app/` is the package — a
+`replaces` token cannot express it, because it rewrites both. Two
+`path_renames` entries can, the first mapping the path to itself.
+
 Why this matters concretely: Flutter derives its Apple bundle identifier by
 camelCasing the project name while Android keeps it snake, so one name yields
 `com.example.myProject` **and** `com.example.my_project` in the same project.
@@ -123,6 +131,15 @@ extra_substitutions:
     to: https://api.example.com
   - from: com.example.superServer            # a casing `replaces` can't derive
     to: com.example.{{ project_name | camelCase }}
+
+# Renames applied to file and directory PATHS only — the mirror of
+# extra_substitutions. For a token that must move in some paths and stay in
+# others; an entry mapping a path to itself pins it (longest match wins).
+path_renames:
+  - from: android/app/                       # fixed Gradle module: keep
+    to: android/app/
+  - from: kotlin/com/example/super_server    # the package: move
+    to: kotlin/com/example/{{ project_name }}
 
 # Text files copied verbatim (no substitution), even though their extension
 # is text. Globs.
