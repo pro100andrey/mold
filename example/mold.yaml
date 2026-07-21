@@ -1,0 +1,18 @@
+# The template manifest, kept beside the example the way it sits beside a real
+# project. `mold pack <dir> -m mold.yaml` reads exactly this file.
+name: super_server
+version: 1.0.0
+
+variables:
+  # `replaces` rewrites every casing of the token — snake_case, kebab-case,
+  # SCREAMING_SNAKE and PascalCase — across both file paths and text content.
+  project_name:
+    description: The new project name
+    default: my_project
+    replaces: super_server
+
+extra_substitutions:
+  # Reaches a form the four derived casings cannot: a Title Case display string.
+  # The `to:` side is a template — `{{ variable | transform }}`.
+  - from: Super Server
+    to: "{{ project_name | titleCase }}"
