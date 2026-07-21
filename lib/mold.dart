@@ -15,6 +15,14 @@ export 'src/cli/cli.dart'
 export 'src/manifest/manifest.dart'
     show Manifest, Substitution, TemplateVariable;
 export 'src/manifest/manifest_validator.dart' show ManifestValidator;
+export 'src/manifest/substitution_template.dart'
+    show
+        LiteralSegment,
+        PlaceholderSegment,
+        SubstitutionTemplate,
+        TemplateError,
+        TemplateErrorKind,
+        TemplateSegment;
 export 'src/output/embed_source.dart' show EmbedSource;
 export 'src/output/output_format.dart' show OutputFormat;
 export 'src/prompt/variable_prompter.dart' show LineReader, VariablePrompter;
