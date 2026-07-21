@@ -186,7 +186,14 @@ class Unbundler implements UnbundlerBase {
       if (decoded == null) {
         out.writeAsBytesSync(entry.value);
       } else {
-        out.writeAsStringSync(contentSubstitutor.apply(decoded));
+        // `utf8.decode` silently drops a leading BOM and `utf8.encode` does
+        // not put it back, so a substituted file would lose three bytes on
+        // every unpack — even under an identity rename. Common in
+        // Windows-authored .bat, .ps1 and .csproj files.
+        final encoded = utf8.encode(contentSubstitutor.apply(decoded));
+        out.writeAsBytesSync(
+          _startsWithBom(entry.value) ? [..._utf8Bom, ...encoded] : encoded,
+        );
       }
       if (archive.executable.contains(entry.key)) {
         restoreExecutable.add(outPath);
@@ -226,6 +233,16 @@ class Unbundler implements UnbundlerBase {
       }
     }
   }
+
+  /// The UTF-8 byte-order mark.
+  static const _utf8Bom = [0xEF, 0xBB, 0xBF];
+
+  /// Whether [bytes] open with a UTF-8 BOM.
+  bool _startsWithBom(List<int> bytes) =>
+      bytes.length >= 3 &&
+      bytes[0] == _utf8Bom[0] &&
+      bytes[1] == _utf8Bom[1] &&
+      bytes[2] == _utf8Bom[2];
 
   /// Decodes [bytes] as UTF-8, or returns null when they are not valid UTF-8.
   String? _tryDecodeUtf8(List<int> bytes) {

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:mold/mold.dart';
@@ -78,5 +79,77 @@ void main() {
         expect(File('${tmp.path}/out/plain.txt').readAsStringSync(), 'ok');
       },
     );
+  });
+
+  group('byte-order mark', () {
+    late Directory tmp;
+
+    setUp(() => tmp = Directory.systemTemp.createTempSync('mold_bom_'));
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    const bom = [0xEF, 0xBB, 0xBF];
+
+    test('survives a rename that rewrites the file', () async {
+      final src = Directory('${tmp.path}/src')..createSync(recursive: true);
+      // A Windows-authored file: BOM, then content carrying the token.
+      File('${src.path}/build.bat').writeAsBytesSync([
+        ...bom,
+        ...utf8.encode('echo super_server'),
+      ]);
+
+      final archive = await const Bundler().bundle(
+        projectDir: src.path,
+        manifest: const Manifest(
+          name: 'demo',
+          version: '1.0.0',
+          variables: [
+            TemplateVariable(
+              name: 'p',
+              defaultValue: 'my_project',
+              replaces: 'super_server',
+            ),
+          ],
+        ),
+      );
+      await const Unbundler().unbundleBytes(
+        source: archive,
+        targetDir: '${tmp.path}/out',
+        vars: const {'p': 'my_project'},
+      );
+
+      final out = File('${tmp.path}/out/build.bat').readAsBytesSync();
+      expect(out.take(3), bom, reason: 'the BOM must survive');
+      expect(utf8.decode(out.skip(3).toList()), 'echo my_project');
+    });
+
+    test('a file without a BOM does not gain one', () async {
+      final src = Directory('${tmp.path}/src')..createSync(recursive: true);
+      File('${src.path}/a.txt').writeAsStringSync('super_server');
+
+      final archive = await const Bundler().bundle(
+        projectDir: src.path,
+        manifest: const Manifest(
+          name: 'demo',
+          version: '1.0.0',
+          variables: [
+            TemplateVariable(
+              name: 'p',
+              defaultValue: 'my_project',
+              replaces: 'super_server',
+            ),
+          ],
+        ),
+      );
+      await const Unbundler().unbundleBytes(
+        source: archive,
+        targetDir: '${tmp.path}/out',
+        vars: const {'p': 'my_project'},
+      );
+
+      expect(
+        File('${tmp.path}/out/a.txt').readAsBytesSync(),
+        utf8.encode('my_project'),
+      );
+    });
   });
 }
