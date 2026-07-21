@@ -54,7 +54,12 @@ class UnifiedDiff {
     for (final hunk in hunks) {
       out.writeln(hunk.header);
       for (final edit in hunk.edits) {
-        out.writeln('${edit.sign}${edit.text}');
+        out.writeln('${edit.sign}${edit.line.text}');
+        // Not counted in the hunk ranges, by the unified-diff format's own
+        // rule — it annotates the line above rather than being one.
+        if (edit.line.noEol) {
+          out.writeln(r'\ No newline at end of file');
+        }
       }
     }
 
@@ -67,21 +72,33 @@ class UnifiedDiff {
   /// A plain `split('\n')` on the usual newline-terminated file yields a
   /// phantom empty last element, which every hunk touching the end of a file
   /// then renders as a stray blank context row.
-  static List<String> _lines(String text) {
+  ///
+  /// The last line carries `noEol` when the text does not end in a newline.
+  /// That flag is part of the line's *identity*, not decoration: two files
+  /// whose final line reads alike but which disagree about the terminator are
+  /// different files, and without it `render` compared them equal and returned
+  /// an empty diff — a real change displayed as no change, while the summary
+  /// above it still counted the replacement. Carrying it also lets the output
+  /// emit the `\ No newline at end of file` marker `git apply` needs.
+  static List<_Line> _lines(String text) {
     if (text.isEmpty) {
       return const [];
     }
 
-    final lines = text.split('\n');
-    if (lines.last.isEmpty) {
-      lines.removeLast();
+    final parts = text.split('\n');
+    final noEol = parts.last.isNotEmpty;
+    if (!noEol) {
+      parts.removeLast();
     }
 
-    return lines;
+    return [
+      for (var i = 0; i < parts.length; i++)
+        (text: parts[i], noEol: noEol && i == parts.length - 1),
+    ];
   }
 
   /// Line-level edit script, common prefix and suffix trimmed first.
-  List<_Edit> _diff(List<String> a, List<String> b) {
+  List<_Edit> _diff(List<_Line> a, List<_Line> b) {
     var head = 0;
     while (head < a.length && head < b.length && a[head] == b[head]) {
       head++;
@@ -104,7 +121,7 @@ class UnifiedDiff {
     ];
   }
 
-  List<_Edit> _diffMiddle(List<String> a, List<String> b) {
+  List<_Edit> _diffMiddle(List<_Line> a, List<_Line> b) {
     if (a.isEmpty && b.isEmpty) {
       return const [];
     }
@@ -220,13 +237,20 @@ class UnifiedDiff {
   }
 }
 
+/// One line of a file, plus whether it is a final line with no terminator.
+///
+/// A record, so equality is structural: the `noEol` flag participates in every
+/// line comparison the diff makes, which is exactly what makes a
+/// terminator-only change visible.
+typedef _Line = ({String text, bool noEol});
+
 enum _Op { keep, add, remove }
 
 class _Edit {
-  const _Edit(this.op, this.text);
+  const _Edit(this.op, this.line);
 
   final _Op op;
-  final String text;
+  final _Line line;
 
   String get sign => switch (op) {
     _Op.keep => ' ',

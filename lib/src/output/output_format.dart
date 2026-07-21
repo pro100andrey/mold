@@ -18,6 +18,16 @@ enum OutputFormat {
   final String flag;
 
   /// Resolves a [flag] value to its [OutputFormat].
-  static OutputFormat fromFlag(String flag) =>
-      values.firstWhere((f) => f.flag == flag);
+  ///
+  /// Throws [FormatException] for an unknown flag. The CLI cannot reach it —
+  /// `argParser` restricts the option to [values] — but a library caller can,
+  /// and the bare `firstWhere` raised a `StateError` naming nothing useful,
+  /// which no layer catches.
+  static OutputFormat fromFlag(String flag) => values.firstWhere(
+    (f) => f.flag == flag,
+    orElse: () => throw FormatException(
+      "Unknown output format '$flag'. Valid formats: "
+      '${values.map((f) => f.flag).join(', ')}.',
+    ),
+  );
 }

@@ -5,7 +5,6 @@ import 'package:args/command_runner.dart';
 import 'package:path/path.dart' as p;
 
 import '../bundler/bundler.dart';
-import '../bundler/file_scanner.dart';
 import '../bundler/project_validator.dart';
 import '../manifest/manifest.dart';
 import '../output/embed_source.dart';
@@ -192,8 +191,12 @@ class PackCommand extends Command<int> {
   /// symlinks were left out and why, and whether every `replaces` token is
   /// distinctive enough to be safe.
   int _dryRunPack(String sourceDir, Manifest manifest) {
+    // One scan, shared with the validator — see Bundler.bundle.
+    final scanned = Directory(sourceDir).existsSync()
+        ? ProjectValidator.scanFor(sourceDir, manifest)
+        : null;
     final result = const ProjectValidator().validate(
-      ProjectInput(dir: sourceDir, manifest: manifest),
+      ProjectInput(dir: sourceDir, manifest: manifest, scan: scanned),
     );
     for (final warning in result.warnings) {
       _err.writeln('Warning: $warning');
@@ -204,11 +207,8 @@ class PackCommand extends Command<int> {
       return 1;
     }
 
-    final scan = FileScanner(
-      include: manifest.include,
-      exclude: manifest.exclude,
-      useGitignore: manifest.useGitignore,
-    ).scan(sourceDir);
+    // Non-null past the validator, which reports a missing directory.
+    final scan = scanned!;
 
     _err.writeln(
       'Dry run — nothing written. ${scan.files.length} files would be '
@@ -247,6 +247,7 @@ class PackCommand extends Command<int> {
       bytes: archive,
       vars: vars,
       resolver: const VariableResolver(noPrompt: true),
+      onWarning: (message) => _err.writeln('Warning: $message'),
     );
 
     _err.writeln('Preview — nothing written.');
@@ -362,6 +363,7 @@ class UnpackCommand extends Command<int> {
             targetDir: targetDir,
             vars: vars,
             resolver: resolver,
+            onWarning: (message) => _err.writeln('Warning: $message'),
             // A summary needs counts, not content.
             withContent: showDiff,
           ),

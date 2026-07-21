@@ -49,13 +49,25 @@ class _TokenStats {
 
 /// Input to the [ProjectValidator]: the source [dir] and its [manifest].
 class ProjectInput {
-  const ProjectInput({required this.dir, required this.manifest});
+  const ProjectInput({required this.dir, required this.manifest, this.scan});
 
   /// The source project directory.
   final String dir;
 
   /// The manifest describing it.
   final Manifest manifest;
+
+  /// An already-performed scan of [dir], when the caller has one.
+  ///
+  /// The validator scans in order to validate exactly the files that get
+  /// packed, and `Bundler` then needs the very same scan to read them. Letting
+  /// it hand the result over turns two full tree walks — each re-reading and
+  /// re-compiling every `.gitignore` — into one; on a project of 1000 packed
+  /// and 2000 ignored files the duplicate walk was about 40% of pack time.
+  ///
+  /// Null means "scan it yourself", which is what a caller validating a
+  /// directory it has not touched does.
+  final ScanResult? scan;
 }
 
 /// Validates the source project (pack phase): the directory has files to pack,
@@ -86,6 +98,17 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   @override
   String get phase => 'project';
 
+  /// Scans [dir] with the filters [manifest] declares.
+  ///
+  /// The one place that maps a manifest onto a [FileScanner], so the validator,
+  /// the bundler and `pack --dry-run` cannot end up filtering differently — a
+  /// divergence would mean validating one set of files and packing another.
+  static ScanResult scanFor(String dir, Manifest manifest) => FileScanner(
+    include: manifest.include,
+    exclude: manifest.exclude,
+    useGitignore: manifest.useGitignore,
+  ).scan(dir);
+
   @override
   ValidationResult validate(ProjectInput input) {
     final dir = Directory(input.dir);
@@ -101,11 +124,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
     // Validate exactly the files the Bundler will pack: same scanner, same
     // include/exclude filters, same symlink handling. Walking the directory
     // directly would validate against files that never reach the archive.
-    final scan = FileScanner(
-      include: input.manifest.include,
-      exclude: input.manifest.exclude,
-      useGitignore: input.manifest.useGitignore,
-    ).scan(input.dir);
+    final scan = input.scan ?? scanFor(input.dir, input.manifest);
     // Built before the empty check: when every file turned out to be a skipped
     // symlink, these warnings are the explanation for the error below.
     final issues = <ValidationError>[
@@ -243,14 +262,17 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
     return stats;
   }
 
+  /// One word character. Static because [_count] runs once per packed file per
+  /// casing — a local rebuilt the pattern thousands of times per pack.
+  static final _word = RegExp(r'\w');
+
   /// Tallies every occurrence of [needle] in [hay] into [into], recording the
   /// enclosing identifier whenever the match is part of a longer word.
   void _count(String hay, String needle, _TokenStats into) {
-    final word = RegExp(r'\w');
     for (var i = hay.indexOf(needle); i != -1; i = hay.indexOf(needle, i + 1)) {
       final end = i + needle.length;
-      final before = i > 0 && word.hasMatch(hay[i - 1]);
-      final after = end < hay.length && word.hasMatch(hay[end]);
+      final before = i > 0 && _word.hasMatch(hay[i - 1]);
+      final after = end < hay.length && _word.hasMatch(hay[end]);
       if (!before && !after) {
         into.record();
         continue;
@@ -258,12 +280,12 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
 
       // Expand outward to name the identifier this match is buried in.
       var start = i;
-      while (start > 0 && word.hasMatch(hay[start - 1])) {
+      while (start > 0 && _word.hasMatch(hay[start - 1])) {
         start--;
       }
 
       var stop = end;
-      while (stop < hay.length && word.hasMatch(hay[stop])) {
+      while (stop < hay.length && _word.hasMatch(hay[stop])) {
         stop++;
       }
 

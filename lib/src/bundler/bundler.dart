@@ -6,7 +6,6 @@ import '../archive/archive_writer.dart';
 import '../manifest/manifest.dart';
 import '../manifest/manifest_validator.dart';
 import '../validation/validation_result.dart';
-import 'file_scanner.dart';
 import 'project_validator.dart';
 
 /// The public packing contract: scan a project and return the archive bytes.
@@ -54,18 +53,24 @@ class Bundler implements BundlerBase {
 
     // Phase order: manifest → project. The first failing phase aborts.
     report(const ManifestValidator().validate(manifest));
+
+    // Scanned once and handed to the validator, which would otherwise walk the
+    // same tree — re-reading and re-compiling every .gitignore — to check the
+    // files this method then reads. Skipped for a missing directory: the walk
+    // would throw a bare FileSystemException before the validator could report
+    // the far more useful PROJECT_DIR_NOT_FOUND.
+    final scanned = Directory(projectDir).existsSync()
+        ? ProjectValidator.scanFor(projectDir, manifest)
+        : null;
     report(
       const ProjectValidator().validate(
-        ProjectInput(dir: projectDir, manifest: manifest),
+        ProjectInput(dir: projectDir, manifest: manifest, scan: scanned),
       ),
     );
 
-    final scanner = FileScanner(
-      include: manifest.include,
-      exclude: manifest.exclude,
-      useGitignore: manifest.useGitignore,
-    );
-    final scan = scanner.scan(projectDir);
+    // Non-null past the validator: a null scan means the directory is missing,
+    // which it reports as an error, and `report` throws on one.
+    final scan = scanned!;
     final files = <String, List<int>>{};
     for (final rel in scan.files) {
       files[rel] = File(p.join(projectDir, rel)).readAsBytesSync();
