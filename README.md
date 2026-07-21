@@ -1,13 +1,13 @@
 # mold
 
 Pack an existing project into a portable template archive, then unpack it under
-a new name with manifest-driven renaming. Ships its own `mold` CLI (with
-`pack` / `unpack` subcommands) and is consumable as a library.
+a new name. Ships a `mold` CLI and is consumable as a library.
 
-The archive is a **verbatim** snapshot — substitution happens only at unpack
-time, so one archive can be materialized under many names.
-
-## How it works
+The template **is a real project** — one that builds, runs and has tests. There
+are no placeholders in the source: renaming rules live in a manifest beside it,
+so the template stays lintable, reviewable and current by being the thing you
+actually use. The archive is a verbatim snapshot; substitution happens only at
+unpack, so one archive materializes under many names.
 
 ```tree
 mold pack   ./super_server  ->  super_server.mold  (gzipped tar)
@@ -15,32 +15,46 @@ mold pack   ./super_server  ->  super_server.mold  (gzipped tar)
                                  └── files/        (the project, verbatim)
 
 mold unpack ./super_server.mold --var project_name=my_project
-                              ->  ./super_server/  (renamed: paths + text,
+                              ->  ./my_project/    (renamed: paths + text,
                                                     binaries copied as-is)
 ```
 
-`pack` honours the project's own `.gitignore` files — all of them, including
-the nested per-platform ones — so a manifest does not restate `.dart_tool/**`,
-`build/**` and friends. `exclude` applies on top: a file is packed only if it
-passes `include`, passes `exclude`, and is not gitignored. `.git/` is never
-packed. `mold pack --dry-run` reports how many files each rule removed.
+---
 
-`pack` reads the source but never mutates it. `unpack` resolves each variable,
-generates all four casings of every `replaces` token, rewrites paths and text
-file contents, and copies binary / `no_substitute` files byte-for-byte. The
-archive is materialized in memory — no scratch directory is written to disk.
+## Contents
 
-The owner-executable bit and a leading UTF-8 BOM are both carried through, so
-a template's scripts stay runnable and its Windows-authored files keep their
-encoding marker. A file whose extension says text but whose
-bytes are not valid UTF-8 is copied verbatim rather than failing the unpack.
+- [Quick start](#quick-start) · [Commands](#commands)
+- [The manifest](#the-manifest-moldyaml) — [file selection](#file-selection) · [variables](#variables) · [substitutions](#substitutions) · [path renames](#path-renames) · [verbatim files](#verbatim-files)
+- [Interpolation and transforms](#interpolation-and-transforms)
+- [Choosing a `replaces` token](#choosing-a-replaces-token)
+- [Previewing](#previewing-a-rename)
+- [Validation](#validation) · [exit codes](#exit-codes)
+- [Library usage](#library-usage) · [embedding](#embedding-a-template-in-a-binary)
+- [What is preserved](#what-is-preserved) · [out of scope](#out-of-scope)
 
-A symlink pointing at a file **inside** the source dir is packed as its
-content, so the unpacked project needs no symlink privileges (Windows requires
-them) and substitution reaches the content. A symlink pointing outside, at a
-directory, or at nothing is skipped with a `PROJECT_SYMLINK_SKIPPED` warning —
-following one out of the project would let `pack` inline `~/.ssh/id_rsa` into a
-template you then share.
+---
+
+## Quick start
+
+```sh
+# 1. Describe the rename beside the project you already have.
+cat > ./super_server/mold.yaml <<'YAML'
+name: super_server
+version: 1.0.0
+variables:
+  project_name:
+    description: The new project name
+    default: my_project
+    replaces: super_server
+YAML
+
+# 2. See what it would do before it does it.
+mold pack ./super_server --dry-run
+
+# 3. Pack, then scaffold under any name.
+mold pack ./super_server -o super_server.mold
+mold unpack super_server.mold -t ./my_project --var project_name=my_project
+```
 
 ## Commands
 
@@ -50,7 +64,7 @@ mold pack <source_dir> [options]
                                               error if absent and -m not given)
   --output,   -o   Output path               (default: ./<name>.mold, or
                                               ./<name>.dart for embed formats)
-  --name,     -n   Output file name stem      (overrides the manifest name)
+  --name,     -n   Output file name stem      (also names the embedded const)
   --format,   -f   tar.gz | bytes | base64    (default: tar.gz)
   --dry-run        Validate and list what would be captured, without writing
 
@@ -62,50 +76,165 @@ mold unpack <source> [options]
   --diff           Also show a unified diff (implies --dry-run)
 ```
 
-Run `mold help pack` / `mold help unpack` for the full option list.
+`mold help pack` / `mold help unpack` for the full option list. During
+development: `dart run mold:mold pack ./super_server`.
 
-## Previewing a rename
+---
 
-```sh
-mold unpack super_server.mold -t ./my_project --dry-run
+## The manifest (`mold.yaml`)
+
+Every key, with its default:
+
+```yaml
+# ─── required ───────────────────────────────────────────────
+name: super_server          # template name; default output file stem
+version: 1.0.0              # free-form string
+
+# ─── file selection ─────────────────────────────────────────
+use_gitignore: true         # honour the project's own .gitignore files
+include: []                 # globs; empty means "everything"
+exclude: []                 # globs, applied on top of .gitignore
+
+# ─── renaming ───────────────────────────────────────────────
+variables:                  # {} — declared rename variables
+  project_name:
+    description: ''         # shown when prompting
+    default: null           # absent → the variable is required
+    replaces: null          # the source token; absent → interpolation only
+
+extra_substitutions: []     # from/to, applied to CONTENT only
+path_renames: []            # from/to, applied to PATHS only
+
+# ─── copied verbatim ────────────────────────────────────────
+no_substitute: []           # globs; content untouched, path still renamed
+binary_extensions: []       # extra extensions treated as binary
 ```
 
-```text
-Dry run — nothing written to ./my_project.
-  138 files: 3 renamed, 18 rewritten (50 replacements), 118 unchanged.
+Unknown keys are ignored silently, so check spelling — `excludes:` is not
+`exclude:`.
 
-Renamed:
-  android/.../com/example/super_server/MainActivity.kt  ->  .../my_project/MainActivity.kt  (1)
-  super_server.iml  ->  my_project.iml
+### File selection
 
-Rewritten:
-  pubspec.yaml  (1)
-  macos/Runner.xcodeproj/project.pbxproj  (13)
+A file is packed only if it **passes `include`**, **passes `exclude`**, and is
+**not gitignored**. Three independent filters, all must pass.
+
+`use_gitignore` (default `true`) reads the project's own `.gitignore` files —
+all of them, including nested per-platform ones — so a manifest never restates
+`.dart_tool/**`, `build/**` and friends. The supported syntax is the real
+thing: `!` negation, `/` anchoring, trailing-slash directory rules, `#`
+comments, and last-match-wins ordering. `.git/` is always excluded. Set
+`use_gitignore: false` to pack the tree exactly as it sits on disk.
+
+`exclude` therefore carries only what git has no opinion about:
+
+```yaml
+exclude:
+  - pubspec.lock            # committed, but a scaffold resolves its own
+  - mold.yaml               # the template's own manifest
 ```
 
-Add `--diff` for the content changes as a unified diff. Unchanged files are
-counted but not listed — a template is mostly unchanged files, and listing them
-buries the ones that matter.
+Symlinks: one pointing at a file **inside** the project *and* passing the same
+filters is packed as its content. One pointing outside, at a directory, at
+nothing, or at a filtered-out file is skipped with a `PROJECT_SYMLINK_SKIPPED`
+warning. Following a link out of the project would let `pack` inline
+`~/.ssh/id_rsa` into a template you then share.
 
-The preview runs the same validation, variable resolution and substitution
-rules as a real unpack, so it cannot disagree with one; it is that computation
-minus the writes. The target directory is validated too, so a dry run also
-tells you the destination is usable.
+### Variables
 
-`mold pack --dry-run` is a preflight rather than a preview: packing substitutes
-nothing, so there is nothing to diff. It reports which files would be captured,
-which symlinks were skipped and why, and whether each `replaces` token is
-distinctive enough.
+```yaml
+variables:
+  project_name:
+    description: The new project name
+    default: my_project
+    replaces: super_server
+```
 
-## Interpolation in substitutions
+`replaces` names a token in the source. At unpack, the resolved value replaces
+**four derived casings** of it, in both paths and content:
 
-`replaces` derives four casings — snake, kebab, SCREAMING and Pascal — and that
-is deliberately all. A fifth would not generalise: for a single-word token
-camelCase is indistinguishable from snake_case, so deriving it is ambiguous.
+| casing          | `super_server` → |
+| --------------- | ---------------- |
+| snake_case      | `super_server`   |
+| kebab-case      | `super-server`   |
+| SCREAMING_SNAKE | `SUPER_SERVER`   |
+| PascalCase      | `SuperServer`    |
 
-Forms outside those four are reached by naming them. Only the `to:` side of an
-`extra_substitutions` entry is a template; `from:` is always literal, so a
-template stays greppable against the real project.
+The source spelling does not matter: `super_server`, `superServer`,
+`SuperServer` and `SUPER_SERVER` all declare the same rename.
+
+**camelCase is deliberately not derived.** For a single-word token it is
+indistinguishable from snake_case, so deriving it would be ambiguous — reach it
+with an explicit transform instead (below).
+
+A variable **without** `replaces` contributes no renames; it exists to be
+interpolated. One that is neither used as a token nor referenced by any
+substitution warns as `MANIFEST_UNUSED_VARIABLE`.
+
+Resolution precedence: explicit `--var` › manifest `default` › interactive
+prompt. End of input is not an answer — with stdin closed, a variable with no
+default stays unresolved and is reported as `VARIABLE_MISSING`, rather than
+silently becoming an empty string.
+
+### Substitutions
+
+For strings the four casings cannot reach. `from` is always a **literal**, so a
+rule stays greppable against the real project; `to` is a template.
+
+```yaml
+extra_substitutions:
+  - from: https://api.super.dev
+    to: https://api.example.com
+  - from: com.example.superServer
+    to: com.example.{{ project_name | camelCase }}
+```
+
+**Content only** — these never touch paths.
+
+### Path renames
+
+The mirror image: **paths only**, never content.
+
+```yaml
+path_renames:
+  - from: kotlin/com/example/super_server
+    to: kotlin/com/example/{{ project_name }}
+```
+
+This exists for the case a `replaces` token structurally cannot express: when
+one literal needs *opposite* treatment in different places. In a Flutter
+project `android/app/` is a hard-coded Gradle module path that must survive,
+while `kotlin/com/example/app/` is the package and must move.
+
+Matching is longest-first, so an entry mapping a path to itself **pins** it
+against a shorter rename:
+
+```yaml
+path_renames:
+  - from: android/app/          # 12 chars — beats the "app" rename key
+    to: android/app/            # pinned to itself
+  - from: kotlin/com/example/app
+    to: kotlin/com/example/{{ project_name }}
+```
+
+### Verbatim files
+
+```yaml
+no_substitute:                # text files copied byte-for-byte…
+  - pubspec.lock              # …though their PATH is still renamed
+  - "**/*.g.dart"
+
+binary_extensions:            # on top of the built-in set
+  - myblob                    # (png, jpg, ttf, zip, sqlite, …)
+```
+
+A file whose extension says text but whose bytes are not valid UTF-8 is also
+copied verbatim rather than failing the unpack.
+
+---
+
+## Interpolation and transforms
+
+Only the `to:` side of a substitution or path rename is a template.
 
 ```text
 {{ variable }}                 the resolved value, unchanged
@@ -123,108 +252,225 @@ template stays greppable against the real project.
 | `titleCase`     | `My Project`         |
 
 Whitespace inside the braces is insignificant. Chaining (`{{ a | x | y }}`) is
-refused rather than read as a transform named `x | y`. A variable declared
-without `replaces` exists precisely to be interpolated.
+refused rather than read as a transform named `x | y`.
 
-`extra_substitutions` reaches **content** only and `path_renames` reaches
-**paths** only; `replaces` reaches both. That is the whole model. When one
-literal needs opposite treatment in different places — Flutter's `android/app/`
-is a fixed Gradle module while `kotlin/com/example/app/` is the package — a
-`replaces` token cannot express it, because it rewrites both. Two
-`path_renames` entries can, the first mapping the path to itself.
+**Why this exists.** Flutter derives its Apple bundle identifier by camelCasing
+the project name while Android keeps it snake, so one name yields
+`com.example.myProject` **and** `com.example.my_project` in the same project —
+plus `My Project` for the home-screen label. The four casings cover one of the
+three; named transforms cover the rest.
 
-Why this matters concretely: Flutter derives its Apple bundle identifier by
-camelCasing the project name while Android keeps it snake, so one name yields
-`com.example.myProject` **and** `com.example.my_project` in the same project.
-The four casings cover the second; the first needs a named transform.
-
-Templates are validated at pack time (and again at unpack), so a bad
+Templates are validated at pack time *and* again at unpack, so a bad
 placeholder or an undeclared variable fails when the template is built, not
 when someone uses it. Rendering happens at unpack, and a rendered value is
 never re-scanned — it cannot cascade into another substitution.
 
-## The manifest (`mold.yaml`)
+### Precedence
 
-```yaml
-name: super_server
-version: 1.0.0
+All rules are applied in a **single left-to-right pass**:
 
-# Which files to capture (globs, relative to the source dir).
-# Empty `include` means "everything".
-include:
-  - "**"
-# The project's own .gitignore files already exclude derived state, and are
-# honoured by default. Set to false to pack the tree exactly as it sits.
-use_gitignore: true
-# Applied on top, for what git has no opinion about.
-exclude:
-  - pubspec.lock
-  - mold.yaml
+- longest match wins at the same position; leftmost wins across positions
+- no cascading — a substituted value is never re-scanned
+- an explicit substitution beats a derived rename key on collision
+- between two variables whose tokens collapse to the same casings, the later
+  one in the manifest wins
 
-# Rename rules. Each variable derives all four casings from one `replaces`
-# token: snake_case, PascalCase, kebab-case, SCREAMING_SNAKE.
-variables:
-  project_name:
-    description: The new project name
-    default: my_project
-    replaces: super_server   # super_server / SuperServer / super-server / SUPER_SERVER
+---
 
-# Replacements that automatic renaming can't reach (applied to text content
-# only, not paths). `from` is always literal; `to` may interpolate a variable
-# through a case transform.
-extra_substitutions:
-  - from: https://api.super.dev
-    to: https://api.example.com
-  - from: com.example.superServer            # a casing `replaces` can't derive
-    to: com.example.{{ project_name | camelCase }}
+## Choosing a `replaces` token
 
-# Renames applied to file and directory PATHS only — the mirror of
-# extra_substitutions. For a token that must move in some paths and stay in
-# others; an entry mapping a path to itself pins it (longest match wins).
-path_renames:
-  - from: android/app/                       # fixed Gradle module: keep
-    to: android/app/
-  - from: kotlin/com/example/super_server    # the package: move
-    to: kotlin/com/example/{{ project_name }}
+Substitution is literal, so a token that is mostly a substring of other words
+corrupts the project. `mold` measures this rather than guessing: it counts
+every occurrence of every derived casing, and how many sit inside a longer
+identifier.
 
-# Text files copied verbatim (no substitution), even though their extension
-# is text. Globs.
-no_substitute:
-  - pubspec.lock
-  - "**/*.g.dart"
+| collateral | verdict                                 |
+| ---------- | --------------------------------------- |
+| ≥ 30%      | **error** — `PROJECT_TOKEN_TOO_GENERIC` |
+| ≥ 5%       | warning — `PROJECT_PARTIAL_OVERLAP`     |
+| below      | silent                                  |
 
-# Extra extensions treated as binary (copied untouched), on top of the
-# built-in set (png, jpg, ttf, zip, sqlite, …).
-binary_extensions:
-  - myblob
+Measured on real corpora: `bin` 95%, `app` 84%, `runner` 25%, a self-named
+project ~14%, `test` 4%.
+
+```text
+[PROJECT_TOKEN_TOO_GENERIC] Variable 'project_name': token 'app' matches 669
+times; 501 (75%) inside longer words: application (73), apple (36),
+AppIcon (30). Substituting it would rewrite those too — pick a more
+distinctive token, or replace these sites with explicit extra_substitutions.
 ```
 
-## CLI usage
+When a token is too generic, the way forward is explicit `extra_substitutions`
+and `path_renames`, not a blunter rename.
+
+The manifest file itself is excluded from that search — a `replaces:` line is a
+declaration, not evidence the project uses the token.
+
+---
+
+## Previewing a rename
 
 ```sh
-# Pack a project (default manifest: ./super_server/mold.yaml)
-mold pack ./super_server -o super_server.mold
-
-# Pack with an explicit manifest path
-mold pack ./super_server -m ./templates/server.yaml -o server.mold
-
-# Unpack under a new name, interactively (prompts for each unresolved variable,
-# showing its description and default)
-mold unpack ./super_server.mold -t ./my_project
-
-# Unpack non-interactively (CI): explicit values + manifest defaults, no prompt
-mold unpack ./super_server.mold -t ./my_project \
-  --var project_name=my_project --no-prompt
+mold unpack super_server.mold -t ./my_project --dry-run
 ```
 
-During development, run it through `dart run`:
+```text
+Dry run — nothing written to ./my_project.
+  129 files: 3 renamed, 18 rewritten (50 replacements), 108 unchanged.
 
-```sh
-dart run mold:mold pack ./super_server -o super_server.mold
-dart run mold:mold unpack ./super_server.mold -t ./my_project -v project_name=my_project
+Renamed:
+  android/.../com/example/super_server/MainActivity.kt  ->  .../my_project/...  (1)
+  super_server.iml  ->  my_project.iml
+
+Rewritten:
+  pubspec.yaml  (1)
+  macos/Runner.xcodeproj/project.pbxproj  (13)
 ```
 
-### Embedding a template in a binary
+Add `--diff` for the content changes as a unified diff. Unchanged files are
+counted but not listed — a template is mostly unchanged files, and listing them
+buries the ones that matter.
+
+The preview runs the same validation, resolution and substitution rules as a
+real unpack, so it cannot disagree with one; it is that computation minus the
+writes. The target is validated too, so a dry run also answers "is the
+destination usable".
+
+`mold pack --dry-run` is a **preflight**, not a preview: packing substitutes
+nothing, so there is nothing to diff. It reports which files would be captured,
+how many each filter removed, and the token verdict.
+
+```text
+Dry run — nothing written. 129 files would be captured, 36 gitignored,
+0 symlinks skipped.
+```
+
+---
+
+## Validation
+
+Every phase is validated with structured, coded errors.
+`ValidationResult.throwIfInvalid()` throws a `ValidationException` when any
+error-severity issue is present; warnings never block and are printed to
+stderr.
+
+| Phase  | Code                                | Meaning                                        |
+| ------ | ----------------------------------- | ---------------------------------------------- |
+| pack   | `MANIFEST_MISSING_NAME`             | required field absent                          |
+| pack   | `MANIFEST_MISSING_VERSION`          | required field absent                          |
+| pack   | `MANIFEST_DUPLICATE_VARIABLE`       | two variables share a name                     |
+| pack   | `MANIFEST_INVALID_GLOB`             | a bad pattern in include/exclude/no_substitute |
+| pack   | `MANIFEST_EMPTY_REPLACES`           | `replaces: ""`                                 |
+| pack   | `MANIFEST_UNSUPPORTED_REPLACES`     | token has no ASCII word characters             |
+| pack   | `MANIFEST_MALFORMED_PLACEHOLDER`    | bad syntax inside `{{ }}`                      |
+| pack   | `MANIFEST_UNTERMINATED_PLACEHOLDER` | `{{` with no `}}`                              |
+| pack   | `MANIFEST_UNKNOWN_VARIABLE`         | placeholder names an undeclared variable       |
+| pack   | `MANIFEST_UNKNOWN_TRANSFORM`        | not one of the six transforms                  |
+| pack   | `MANIFEST_UNUSED_VARIABLE` ⚠        | variable does nothing                          |
+| pack   | `PROJECT_DIR_NOT_FOUND`             | source directory missing                       |
+| pack   | `PROJECT_DIR_EMPTY`                 | nothing to pack after filtering                |
+| pack   | `PROJECT_REPLACES_NOT_FOUND`        | token occurs in no captured file               |
+| pack   | `PROJECT_TOKEN_TOO_GENERIC`         | ≥30% of matches are collateral                 |
+| pack   | `PROJECT_PARTIAL_OVERLAP` ⚠         | ≥5% of matches are collateral                  |
+| pack   | `PROJECT_SYMLINK_SKIPPED` ⚠         | a symlink was left out, with the reason        |
+| unpack | `ARCHIVE_INVALID`                   | not a valid gzipped tar                        |
+| unpack | `ARCHIVE_MISSING_MANIFEST`          | no embedded `mold.yaml`                        |
+| unpack | `ARCHIVE_MISSING_FILES`             | no `files/` tree                               |
+| unpack | `ARCHIVE_UNSAFE_PATH`               | an entry escapes the target directory          |
+| unpack | `TARGET_PARENT_NOT_FOUND`           | parent directory missing                       |
+| unpack | `TARGET_OCCUPIED`                   | destination exists and is not empty            |
+| unpack | `TARGET_NOT_WRITABLE`               | no write permission                            |
+| unpack | `VARIABLE_MISSING`                  | required variable has no value                 |
+| unpack | `VARIABLE_INVALID_FORMAT`           | value is not a well-formed name token          |
+
+⚠ = warning; does not block.
+
+Phase order — pack: `Manifest → Project`; unpack:
+`Archive → Manifest → Target → Variables`. The first failing phase aborts
+before the next runs. Target precedes variables so an interactive unpack does
+not make you answer every prompt before learning the destination is occupied.
+
+### Exit codes
+
+| code | meaning                          |
+| ---- | -------------------------------- |
+| `0`  | success                          |
+| `1`  | validation, IO or format failure |
+| `64` | usage error (bad arguments)      |
+
+---
+
+## Library usage
+
+```dart
+import 'package:mold/mold.dart';
+
+// Pack — always returns the gzipped-tar archive bytes.
+final archive = await const Bundler().bundle(
+  projectDir: './super_server',
+  manifest: Manifest.fromFile('./super_server/mold.yaml'),
+  onWarning: (message) => print('Warning: $message'),
+);
+await File('super_server.mold').writeAsBytes(archive);
+
+// Unpack from a file…
+await const Unbundler().unbundleFile(
+  source: 'super_server.mold',
+  targetDir: './my_project',
+  vars: {'project_name': 'my_project'},
+);
+
+// …or straight from in-memory bytes (e.g. an embedded template).
+await const Unbundler().unbundleBytes(
+  source: archive,
+  targetDir: './my_project',
+  vars: {'project_name': 'my_project'},
+);
+```
+
+`onWarning` receives non-fatal problems that would otherwise be invisible — a
+skipped symlink, a token that will over-reach, a failed `chmod`.
+
+### Previewing programmatically
+
+```dart
+final plan = const Unbundler().plan(
+  bytes: archive,
+  targetDir: './my_project',
+  vars: {'project_name': 'my_project'},
+);
+
+for (final file in plan.renamed) {
+  print('${file.from} -> ${file.to} (${file.replacements})');
+}
+print('${plan.totalReplacements} replacements in ${plan.files.length} files');
+```
+
+Each `PlannedFile` carries `from`, `to`, `verbatim`, `replacements`, and — for
+text files — `before` and `after`, which `UnifiedDiff` renders.
+
+### Prompting
+
+```dart
+final resolver = VariableResolver(
+  noPrompt: false, // true → defaults only, never prompt
+  prompter: VariablePrompter(stdout, stdin.readLineSync),
+);
+
+await const Unbundler().unbundleBytes(
+  source: archive,
+  targetDir: './my_project',
+  vars: const {},
+  resolver: resolver,
+);
+```
+
+Catch `ValidationException` — not `FormatException` — to handle a missing
+variable.
+
+---
+
+## Embedding a template in a binary
 
 `-f bytes` / `-f base64` emit a Dart source file (with an
 `AUTO-GENERATED — DO NOT EDIT` header) so a template can ship inside a compiled
@@ -251,124 +497,41 @@ await const Unbundler().unbundleBytes(
 );
 ```
 
-## Library usage
+`-n` names both the output file and the generated const, so two templates
+packed from one manifest do not collide on the identifier.
 
-```dart
-import 'package:mold/mold.dart';
-
-// Pack — always returns the gzipped-tar archive bytes.
-final archive = await const Bundler().bundle(
-  projectDir: './super_server',
-  manifest: Manifest.fromFile('./super_server/mold.yaml'),
-);
-await File('super_server.mold').writeAsBytes(archive);
-
-// Unpack from a file…
-await const Unbundler().unbundleFile(
-  source: 'super_server.mold',
-  targetDir: './my_project',
-  vars: {'project_name': 'my_project'},
-);
-
-// …or straight from in-memory bytes (e.g. an embedded template).
-await const Unbundler().unbundleBytes(
-  source: archive,
-  targetDir: './my_project',
-  vars: {'project_name': 'my_project'},
-);
-```
-
-### Variable resolution
-
-An unresolved variable falls back to its manifest `default`. To prompt
-interactively (or force non-interactive defaults), pass a `VariableResolver`:
-
-```dart
-import 'dart:io';
-
-final resolver = VariableResolver(
-  noPrompt: false, // true → defaults only, never prompt
-  prompter: VariablePrompter(stdout, stdin.readLineSync),
-);
-
-await const Unbundler().unbundleBytes(
-  source: archive,
-  targetDir: './my_project',
-  vars: const {},        // nothing explicit → resolver prompts / uses defaults
-  resolver: resolver,
-);
-```
-
-Precedence: explicit `vars` › `--no-prompt` (manifest defaults) › interactive
-prompt.
-
-A variable that none of those can fill is **left out** of the resolved map
-rather than raising on the spot, so `VariablesValidator` reports every gap at
-once as `VARIABLE_MISSING`. Catch `ValidationException` — not `FormatException`
-— to handle a missing variable.
-
-`unbundleBytes` / `unbundleFile` / `unbundle` also take an `onWarning` callback,
-which receives non-fatal problems that would otherwise be invisible, such as
-failing to restore an executable bit. The CLI prints these to stderr.
-
-### Rendering embed sources programmatically
+To render the source yourself:
 
 ```dart
 final dartSource = const EmbedSource()
     .bytesSource(archive: archive, name: 'super_server');
-await File('lib/template.dart').writeAsString(dartSource);
 ```
 
-## Validation
+---
 
-Every phase is validated with structured, coded errors. A
-`ValidationResult.throwIfInvalid()` throws a `ValidationException` when any
-error-severity issue is present; warnings never block.
+## What is preserved
 
-| Phase  | Validator            | Checks                                                                                                        |
-| ------ | -------------------- | ------------------------------------------------------------------------------------------------------------- |
-| pack   | `ManifestValidator`  | required fields, no duplicate variables, valid globs, usable `replaces` tokens, well-formed `{{ }}` templates |
-| pack   | `ProjectValidator`   | dir has files to pack; each `replaces` token occurs and is distinctive enough                                 |
-| unpack | `ArchiveValidator`   | valid gzip+tar, contains `mold.yaml` and a `files/` tree, no entry escapes the target                         |
-| unpack | `ManifestValidator`  | (as above, on the embedded manifest)                                                                          |
-| unpack | `TargetValidator`    | parent exists, destination free, writable                                                                     |
-| unpack | `VariablesValidator` | all required present; each `replaces` value is a well-formed name token                                       |
+- **The owner-executable bit** — a template's scripts and hooks stay runnable.
+- **A leading UTF-8 BOM** — Windows-authored `.bat`, `.ps1` and `.csproj` keep
+  their encoding marker.
+- **Bytes of anything not substituted** — binaries, `no_substitute` matches,
+  and any file that is not valid UTF-8, including CRLF, NUL bytes and emoji.
 
-The CLI maps these to exit codes: `0` ok, `1` validation / IO / format
-failure, `64` usage error. Warnings print to stderr and never block.
-
-A `replaces` token is measured, not just located. `ProjectValidator` counts how
-often each derived casing occurs and how much of that sits inside longer words:
-at or above 30% it refuses to pack (`PROJECT_TOKEN_TOO_GENERIC`, naming the
-worst offenders), at or above 5% it warns. `app` in a Flutter project measures
-75% — `application`, `apple`, `AppIcon` — and is refused; a project named after
-itself measures ~14% and only warns. When a token is too generic, the way
-forward is explicit `extra_substitutions` rather than a blunter rename.
-
-The manifest file itself is excluded from that search: a `replaces:` line is a
-declaration, not evidence the project uses the token.
-
-Order — pack: `Manifest → Project`; unpack:
-`Archive → Manifest → Target → Variables`. The first failing phase aborts before
-the next runs.
-
-`ProjectValidator` checks the files the pack will actually capture — the
-`include` / `exclude` globs apply to validation too, so a token that occurs only
-in an excluded file is reported as missing.
-
-Target is validated *before* variables because resolving them may prompt:
-otherwise you would answer every prompt and only then learn the destination was
-occupied. A variable that cannot be resolved is reported as `VARIABLE_MISSING`
-along with all the others, rather than aborting on the first one.
+The archive is materialized in memory — no scratch directory is written to
+disk, and `pack` never mutates the source.
 
 ## Out of scope
 
-- Content-based binary detection (extensions only — no MIME sniffing; the
-  UTF-8 fallback above is a decode failure, not classification).
-- File modes beyond the executable bit (no ownership, no full mode round trip).
-- Preserving symlinks as symlinks (they are dereferenced; see above).
-- Templating the packed files. Project content is never evaluated — no
+- **Templating the packed files.** Project content is never evaluated — no
   conditionals, loops, partials or includes, and a `{{ }}` inside a packed file
   is just text. The one place `{{ }}` is interpreted is a manifest `to:` value.
-- Compression other than gzip, encryption, or signing.
-- Remote template registries / fetching over the network.
+- **Content-based binary detection** — extensions only, no MIME sniffing. The
+  UTF-8 fallback is a decode failure, not classification.
+- **File modes beyond the executable bit** — no ownership, no full mode round
+  trip.
+- **Preserving symlinks as symlinks** — they are dereferenced, so an unpack
+  needs no symlink privileges (Windows requires them).
+- **Empty directories** — not represented in the archive.
+- **Compression other than gzip**, encryption, or signing.
+- **Remote template registries** or fetching over the network.
+- **Updating an already-scaffolded project** when its template moves forward.
