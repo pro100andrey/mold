@@ -438,6 +438,7 @@ stderr.
 | pack   | `MANIFEST_UNKNOWN_VARIABLE`         | placeholder names an undeclared variable       |
 | pack   | `MANIFEST_UNKNOWN_TRANSFORM`        | not one of the six transforms                  |
 | pack   | `MANIFEST_UNUSED_VARIABLE` ⚠        | variable does nothing                          |
+| pack   | `MANIFEST_DUPLICATE_SUBSTITUTION`   | two entries in one section share a `from`      |
 | pack   | `PROJECT_DIR_NOT_FOUND`             | source directory missing                       |
 | pack   | `PROJECT_DIR_EMPTY`                 | nothing to pack after filtering                |
 | pack   | `PROJECT_REPLACES_NOT_FOUND`        | token occurs in no captured file               |
@@ -445,6 +446,7 @@ stderr.
 | pack   | `PROJECT_PARTIAL_OVERLAP` ⚠         | ≥5% of matches are collateral                  |
 | pack   | `PROJECT_SYMLINK_SKIPPED` ⚠         | a symlink was left out, with the reason        |
 | unpack | `ARCHIVE_INVALID`                   | not a valid gzipped tar                        |
+| unpack | `ARCHIVE_TOO_LARGE`                 | decompresses past the size ceiling             |
 | unpack | `ARCHIVE_MISSING_MANIFEST`          | no embedded `mold.yaml`                        |
 | unpack | `ARCHIVE_MISSING_FILES`             | no `files/` tree                               |
 | unpack | `ARCHIVE_UNSAFE_PATH`               | an entry escapes the target directory          |

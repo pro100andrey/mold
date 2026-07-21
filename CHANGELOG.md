@@ -35,7 +35,14 @@ manifest beside it rather than as placeholders in the source.
 - A `replaces` token is measured, not just located: at or above 30% collateral
   matches packing is refused, at or above 5% it warns, naming the identifiers
   it would corrupt.
-- Archive entries that would escape the target directory are rejected.
+- Archive entries that would escape the target directory are rejected, and an
+  archive that decompresses past a 512 MiB ceiling is refused before it can
+  exhaust memory — templates are made to be unpacked by third parties, so the
+  untrusted-input path is the normal one.
+- A failed unpack cleans up after itself: files it wrote are removed, and a
+  destination directory it created is removed, so the obvious retry is not
+  blocked by half-written debris. A directory that already existed is left in
+  place.
 - Two entries that would land on the same path are rejected before anything is
   written. Substitution rewrites paths, so a `path_renames` pair or a token
   whose casings converge can point two files at one destination; the writer
