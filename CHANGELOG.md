@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1
+
+No API or behaviour changes — `lib/` is identical to 0.1.0.
+
+- A runnable `example/`: a manifest beside the code, a script that packs a
+  throwaway project and unpacks it under a new name, and a README that pub.dev
+  renders on the Example tab.
+- pub.dev topics: `scaffolding`, `template`, `cli`, `boilerplate`,
+  `project-generator`.
+
 ## 0.1.0
 
 First release.

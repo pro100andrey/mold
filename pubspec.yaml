@@ -3,9 +3,16 @@ description: >-
   Pack an existing project into a portable template archive and unpack it with
   manifest-driven renaming. Ships its own `mold` CLI (`pack` / `unpack`) and is
   consumable as a library.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/pro100andrey/mold
 issue_tracker: https://github.com/pro100andrey/mold/issues
+
+topics:
+  - scaffolding
+  - template
+  - cli
+  - boilerplate
+  - project-generator
 
 environment:
   sdk: ^3.12.2
