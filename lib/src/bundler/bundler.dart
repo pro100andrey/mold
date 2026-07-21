@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import '../archive/archive_writer.dart';
 import '../manifest/manifest.dart';
 import '../manifest/manifest_validator.dart';
+import '../validation/validation_result.dart';
 import 'file_scanner.dart';
 import 'project_validator.dart';
 
@@ -14,9 +15,14 @@ import 'project_validator.dart';
 /// embed source is an output-emission concern handled separately.
 abstract class BundlerBase {
   /// Packs [projectDir] per [manifest] and returns the archive bytes.
+  ///
+  /// [onWarning] receives non-fatal problems that would otherwise be silent,
+  /// such as a symlink left out of the archive or a `replaces` token that will
+  /// over-reach.
   Future<List<int>> bundle({
     required String projectDir,
     required Manifest manifest,
+    void Function(String message)? onWarning,
   });
 }
 
@@ -32,12 +38,26 @@ class Bundler implements BundlerBase {
   Future<List<int>> bundle({
     required String projectDir,
     required Manifest manifest,
+    void Function(String message)? onWarning,
   }) async {
+    // Warnings are reported BEFORE throwIfInvalid, not after. ProjectValidator
+    // deliberately builds its skipped-symlink warnings ahead of the empty-dir
+    // error because they are the explanation for it; reporting after the throw
+    // would drop exactly the case they exist for.
+    void report(ValidationResult result) {
+      for (final warning in result.warnings) {
+        onWarning?.call(warning.toString());
+      }
+      result.throwIfInvalid();
+    }
+
     // Phase order: manifest → project. The first failing phase aborts.
-    const ManifestValidator().validate(manifest).throwIfInvalid();
-    const ProjectValidator()
-        .validate(ProjectInput(dir: projectDir, manifest: manifest))
-        .throwIfInvalid();
+    report(const ManifestValidator().validate(manifest));
+    report(
+      const ProjectValidator().validate(
+        ProjectInput(dir: projectDir, manifest: manifest),
+      ),
+    );
 
     final scanner = FileScanner(
       include: manifest.include,

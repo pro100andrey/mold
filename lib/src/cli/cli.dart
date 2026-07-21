@@ -105,6 +105,7 @@ class PackCommand extends Command<int> {
       final archive = await const Bundler().bundle(
         projectDir: sourceDir,
         manifest: manifest,
+        onWarning: (message) => _err.writeln('Warning: $message'),
       );
       // One stem drives both the file name and the generated const identifier;
       // rendering from manifest.name here would make `-n foo` write foo.dart
