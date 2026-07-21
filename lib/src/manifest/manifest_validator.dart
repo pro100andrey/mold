@@ -119,8 +119,9 @@ class ManifestValidator extends ValidatorBase<Manifest> {
     final issues = <ValidationError>[];
     final referenced = <String>{};
 
-    input.replacementTemplates.forEach((from, to) {
-      final template = SubstitutionTemplate.parse(to);
+    for (final substitution in input.replacementTemplates) {
+      final from = substitution.from;
+      final template = SubstitutionTemplate.parse(substitution.to);
       for (final error in template.errors) {
         issues.add(
           ValidationError(
@@ -147,7 +148,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
           );
         }
       }
-    });
+    }
 
     for (final variable in input.variables) {
       if (variable.replaces == null && !referenced.contains(variable.name)) {

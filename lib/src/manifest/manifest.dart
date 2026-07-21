@@ -132,7 +132,7 @@ class Manifest {
       pathRenames: _substitutions(doc['path_renames'], 'path_renames'),
       noSubstitute: _stringList(doc['no_substitute']),
       binaryExtensions: _stringList(doc['binary_extensions']),
-      useGitignore: doc['use_gitignore'] as bool? ?? true,
+      useGitignore: _bool(doc['use_gitignore'], 'use_gitignore', true),
       source: text,
       path: path,
     );
@@ -217,15 +217,22 @@ class Manifest {
   /// to a list buried in a validator that nothing points at.
   List<String> get globPatterns => [...include, ...exclude, ...noSubstitute];
 
-  /// Every string in this manifest that is interpreted as a substitution
-  /// template, keyed by the entry it belongs to so errors can name it.
+  /// Every substitution in this manifest whose `to` is interpreted as a
+  /// template, in one place.
   ///
   /// Same single-point-of-truth role as [globPatterns]: a new template-bearing
   /// field is added here, beside its declaration.
-  Map<String, String> get replacementTemplates => {
-    for (final s in extraSubstitutions) s.from: s.to,
-    for (final s in pathRenames) s.from: s.to,
-  };
+  ///
+  /// A **list**, not a map keyed by `from`. Keying by `from` silently collapsed
+  /// two entries sharing one — an `extra_substitutions` entry and a
+  /// `path_renames` entry naming the same literal — so only one of the two `to`
+  /// templates was ever validated, while unpack rendered both. A malformed
+  /// placeholder in the unchecked one renders to the empty string, deleting the
+  /// text it was meant to replace.
+  List<Substitution> get replacementTemplates => [
+    ...extraSubstitutions,
+    ...pathRenames,
+  ];
 
   /// Equality over the declared content, so a round trip through [toYaml] can
   /// be asserted in one expression and a field forgotten there fails loudly.
@@ -382,6 +389,27 @@ class Manifest {
   /// enforcement is the `ManifestValidator`'s job, so parsing stays lenient.
   static String _optionalString(Object? value) =>
       value == null ? '' : value.toString();
+
+  /// Reads an optional boolean field, falling back to [fallback] when absent.
+  ///
+  /// A cast (`as bool?`) threw `TypeError` for anything else, which no caller
+  /// catches: the CLI handles `FormatException` and exits 1, but a `TypeError`
+  /// escaped as an exit-255 crash with a stack trace. `use_gitignore: yes` is
+  /// enough to trigger it — YAML 1.1 spelled booleans that way, and
+  /// `package:yaml` is 1.2, where `yes` is the string "yes".
+  static bool _bool(Object? value, String key, bool fallback) {
+    if (value == null) {
+      return fallback;
+    }
+    if (value is! bool) {
+      throw FormatException(
+        "'$key' must be true or false, but got: $value. Note that YAML 1.2 "
+        'reads yes/no/on/off as strings, not booleans.',
+      );
+    }
+
+    return value;
+  }
 
   static List<String> _stringList(Object? value) {
     if (value == null) {
