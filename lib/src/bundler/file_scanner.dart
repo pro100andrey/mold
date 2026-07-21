@@ -56,9 +56,35 @@ class ScanResult {
   /// be silent.
   final Map<String, SkipReason> skippedLinks;
 
-  /// How many files the project's `.gitignore` rules excluded. Reported by
+  /// How many entries the project's `.gitignore` rules excluded. Reported by
   /// `mold pack --dry-run` so an implicit default stays inspectable.
+  ///
+  /// An ignored **directory** counts once, not once per file beneath it: the
+  /// scan does not enter it, exactly as git does not, so the files inside were
+  /// never enumerated and there is nothing there to count.
   final int gitignored;
+}
+
+/// What a descending scan has found so far, threaded through the recursion.
+///
+/// A mutable carrier rather than merged return values: the walk is depth-first
+/// over an arbitrary tree, and combining four collections at every level would
+/// copy them once per directory.
+class _Accumulator {
+  final files = <String>[];
+  final executable = <String>{};
+  final skipped = <String, SkipReason>{};
+
+  /// Private, so `type_annotate_public_apis` does not demand an annotation
+  /// that `omit_obvious_property_types` would then reject.
+  var _gitignored = 0;
+
+  /// How many entries the `.gitignore` rules rejected. A pruned directory
+  /// counts once, not once per file inside it — the walk never enters it, so
+  /// there is nothing inside it to count.
+  int get gitignored => _gitignored;
+
+  void countIgnored() => _gitignored++;
 }
 
 /// Walks a source directory and applies `include` / `exclude` glob filters,
@@ -92,6 +118,12 @@ class FileScanner {
   final bool useGitignore;
 
   /// Scans [sourceDir]. An empty include set means "all files".
+  ///
+  /// Descends directory by directory rather than taking one recursive listing,
+  /// so an ignored directory is never entered — the way git itself walks. A
+  /// flat listing had to enumerate and path-normalize every file under
+  /// `build/`, `.dart_tool/` and `.git/` before discarding them, which on a
+  /// real project is most of the tree.
   ScanResult scan(String sourceDir) {
     final root = Directory(sourceDir);
     // Canonical, because the source dir may itself be reached through a link
@@ -99,31 +131,57 @@ class FileScanner {
     // containment check below fail.
     final canonicalRoot = root.resolveSymbolicLinksSync();
 
-    // Walked once. GitignoreRules reads the .gitignore files out of this same
-    // listing rather than doing its own recursive walk of the same tree.
-    final entities = root.listSync(recursive: true, followLinks: false);
-    final ignored = useGitignore
-        ? GitignoreRules.fromListing(sourceDir, entities)
-        : const GitignoreRules.empty();
+    final out = _Accumulator();
+    _descend(
+      root,
+      sourceDir,
+      canonicalRoot,
+      useGitignore ? GitignoreRules.base() : const GitignoreRules.empty(),
+      out,
+    );
+    out.files.sort();
 
-    final matches = <String>[];
-    final executable = <String>{};
-    final skipped = <String, SkipReason>{};
-    var gitignored = 0;
-    for (final entity in entities) {
-      // Type first: directories are neither packed nor reported, so matching
-      // them against every glob is pure waste.
+    return ScanResult(
+      files: out.files,
+      executable: out.executable,
+      skippedLinks: out.skipped,
+      gitignored: out.gitignored,
+    );
+  }
+
+  /// Walks one directory, carrying the `.gitignore` rules in force for it.
+  void _descend(
+    Directory dir,
+    String sourceDir,
+    String canonicalRoot,
+    GitignoreRules inherited,
+    _Accumulator out,
+  ) {
+    final rules = _rulesFor(dir, sourceDir, inherited);
+    for (final entity in dir.listSync(followLinks: false)) {
+      final rel = _relative(entity.path, sourceDir);
+
+      // A directory link comes back as a Link, never a Directory, so this
+      // cannot follow one — which is also why the walk cannot cycle.
+      if (entity is Directory) {
+        if (rules.isIgnoredEntry(rel, isDirectory: true)) {
+          out.countIgnored();
+          continue;
+        }
+        _descend(entity, sourceDir, canonicalRoot, rules, out);
+        continue;
+      }
+
       final isFile = entity is File;
       if (!isFile && entity is! Link) {
         continue;
       }
 
-      final rel = _relative(entity.path, sourceDir);
       // Asked first, so a file caught by both filters is still reported as
       // gitignored — the tally is what someone auditing "why is this file
       // missing" reads, and attributing it to `exclude` alone understates it.
-      if (ignored.isIgnored(rel)) {
-        gitignored++;
+      if (rules.isIgnoredEntry(rel, isDirectory: false)) {
+        out.countIgnored();
         continue;
       }
 
@@ -134,25 +192,38 @@ class FileScanner {
       if (!isFile) {
         final reason = _skipReason(entity as Link, canonicalRoot);
         if (reason != null) {
-          skipped[rel] = reason;
+          out.skipped[rel] = reason;
           continue;
         }
       }
       // Dereferenced: File operations on a link path follow it, so one stat
       // covers both cases and reports the target's mode.
-      matches.add(rel);
-      if (_isExecutable(entity.path)) {
-        executable.add(rel);
+      out.files.add(rel);
+      if (_isExecutable(entity)) {
+        out.executable.add(rel);
       }
     }
+  }
 
-    matches.sort();
+  /// The rules for [dir]: those [inherited] from its ancestors, plus its own
+  /// `.gitignore` if it has one.
+  GitignoreRules _rulesFor(
+    Directory dir,
+    String sourceDir,
+    GitignoreRules inherited,
+  ) {
+    if (!useGitignore) {
+      return inherited;
+    }
+    final file = File(p.join(dir.path, '.gitignore'));
+    if (!file.existsSync()) {
+      return inherited;
+    }
+    final scope = _relative(dir.path, sourceDir);
 
-    return ScanResult(
-      files: matches,
-      executable: executable,
-      skippedLinks: skipped,
-      gitignored: gitignored,
+    return inherited.extend(
+      scope == '.' ? '' : scope,
+      file.readAsLinesSync(),
     );
   }
 
@@ -192,12 +263,16 @@ class FileScanner {
         _ => .unresolvable,
       };
 
-  /// Whether [path] is owner-executable. Follows links, so a dereferenced
-  /// link reports its target's mode.
-  bool _isExecutable(String path) {
+  /// Whether [entity] is owner-executable.
+  ///
+  /// Uses the entity's own `statSync`, which follows links, so a dereferenced
+  /// link reports its target's mode. A `FileStat.statSync(path)` on top of the
+  /// walk's own stat was a second syscall per candidate file for a bit the
+  /// first one already carried.
+  bool _isExecutable(FileSystemEntity entity) {
     try {
       // 0o100 — owner-execute.
-      return FileStat.statSync(path).mode & 64 != 0;
+      return entity.statSync().mode & 64 != 0;
     } on FileSystemException {
       return false;
     }
