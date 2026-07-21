@@ -13,7 +13,9 @@ import '../manifest/manifest.dart';
 import '../manifest/manifest_validator.dart';
 import '../manifest/substitution_template.dart';
 import '../prompt/variable_resolver.dart';
+import '../validation/validation_result.dart';
 import 'case_converter.dart';
+import 'rename_validator.dart';
 import 'substitutor.dart';
 import 'target_validator.dart';
 import 'unpack_plan.dart';
@@ -60,6 +62,7 @@ class Unbundler implements UnbundlerBase {
       targetDir,
       vars,
       resolver,
+      onWarning,
     );
 
     // Re-checked immediately before writing. Resolving variables may block on
@@ -124,27 +127,43 @@ class Unbundler implements UnbundlerBase {
     String? targetDir,
     Map<String, String> vars,
     VariableResolver? resolver,
+    void Function(String message)? onWarning,
   ) {
-    const ArchiveValidator().validate(bytes).throwIfInvalid();
+    // Every phase reports its warnings before its errors can abort the run.
+    // Dropping them — which this method did, by calling throwIfInvalid alone —
+    // meant an unpacked template could carry a MANIFEST_UNUSED_VARIABLE that
+    // only ever reached whoever packed it.
+    void report(ValidationResult result) {
+      for (final warning in result.warnings) {
+        onWarning?.call(warning.toString());
+      }
+      result.throwIfInvalid();
+    }
+
+    report(const ArchiveValidator().validate(bytes));
     final archive = const ArchiveReader().read(bytes);
     final manifest = Manifest.fromYaml(archive.manifestYaml);
-    const ManifestValidator().validate(manifest).throwIfInvalid();
+    report(const ManifestValidator().validate(manifest));
     // A null target means "no destination in mind" — previewing the
     // substitutions of a template that has not been distributed yet. Every
     // other phase still runs.
     if (targetDir != null) {
-      const TargetValidator().validate(targetDir).throwIfInvalid();
+      report(const TargetValidator().validate(targetDir));
     }
 
     final resolved = (resolver ?? const VariableResolver()).resolve(
       manifest.variables,
       vars,
     );
-    const VariablesValidator()
-        .validate(
-          VariablesInput(variables: manifest.variables, values: resolved),
-        )
-        .throwIfInvalid();
+    report(
+      const VariablesValidator().validate(
+        VariablesInput(
+          variables: manifest.variables,
+          values: resolved,
+          explicit: vars,
+        ),
+      ),
+    );
 
     return (archive, manifest, resolved);
   }
@@ -165,11 +184,12 @@ class Unbundler implements UnbundlerBase {
     void Function(String message)? onWarning,
   ) {
     final rules = _Rules(manifest, resolved);
+    final renames = rules.renameAll(archive.files.keys);
 
     final target = Directory(targetDir)..createSync(recursive: true);
     final restoreExecutable = <String>[];
     for (final entry in archive.files.entries) {
-      final outRel = rules.rename(entry.key);
+      final outRel = renames[entry.key]!;
       final outPath = p.join(target.path, outRel);
       final out = File(outPath)..parent.createSync(recursive: true);
 
@@ -232,11 +252,15 @@ class Unbundler implements UnbundlerBase {
   /// destination is usable. Pass null to preview the substitutions alone, with
   /// no destination in mind — what `mold pack --diff` does for a template that
   /// has not been distributed yet.
+  ///
+  /// [onWarning] receives the same warnings a real unpack would report, so a
+  /// preview is not quieter than the thing it previews.
   UnpackPlan plan({
     required List<int> bytes,
     String? targetDir,
     Map<String, String> vars = const {},
     VariableResolver? resolver,
+    void Function(String message)? onWarning,
     bool withContent = true,
   }) {
     final (archive, manifest, resolved) = _prepare(
@@ -244,22 +268,30 @@ class Unbundler implements UnbundlerBase {
       targetDir,
       vars,
       resolver,
+      onWarning,
     );
     final rules = _Rules(manifest, resolved);
+    final renames = rules.renameAll(archive.files.keys);
 
     return UnpackPlan([
       for (final entry in archive.files.entries)
-        _planOne(rules, entry.key, entry.value, withContent: withContent),
+        _planOne(
+          rules,
+          entry.key,
+          renames[entry.key]!,
+          entry.value,
+          withContent: withContent,
+        ),
     ]);
   }
 
   PlannedFile _planOne(
     _Rules rules,
     String key,
+    String to,
     List<int> bytes, {
     required bool withContent,
   }) {
-    final to = rules.rename(key);
     final before = rules.decodeForSubstitution(key, bytes);
     if (before == null) {
       return PlannedFile(
@@ -343,11 +375,24 @@ class _Rules {
   /// The UTF-8 byte-order mark.
   static const _utf8Bom = [0xEF, 0xBB, 0xBF];
 
+  /// Where every archive entry in [keys] lands, as a `from` → `to` map.
+  ///
+  /// Resolved for the whole archive at once, then validated as a set. A
+  /// collision is a property of the mapping rather than of any one entry —
+  /// two entries converging on one path is invisible to a per-entry check —
+  /// so this is the only level at which it can be caught.
+  Map<String, String> renameAll(Iterable<String> keys) {
+    final renames = {for (final key in keys) key: _renameOne(key)};
+    const RenameValidator().validate(renames).throwIfInvalid();
+
+    return renames;
+  }
+
   /// Where the archive entry [key] lands, after path substitution.
   ///
   /// Containment is re-checked here, after substitution and independently of
   /// `ArchiveValidator`, so no caller can write outside its target directory.
-  String rename(String key) {
+  String _renameOne(String key) {
     final out = pathSubstitutor.apply(key);
     if (!isContainedArchivePath(out)) {
       throw FormatException(

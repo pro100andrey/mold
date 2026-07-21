@@ -31,6 +31,7 @@ export 'src/prompt/variable_prompter.dart' show LineReader, VariablePrompter;
 export 'src/prompt/variable_resolver.dart' show VariableResolver;
 export 'src/unbundler/case_converter.dart' show CaseConverter;
 export 'src/unbundler/case_transform.dart' show CaseTransform;
+export 'src/unbundler/rename_validator.dart' show RenameValidator;
 export 'src/unbundler/substitutor.dart' show Substitutor;
 export 'src/unbundler/target_validator.dart' show TargetValidator;
 export 'src/unbundler/unbundler.dart' show Unbundler, UnbundlerBase;
