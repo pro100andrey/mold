@@ -453,11 +453,17 @@ stderr.
 | unpack | `TARGET_NOT_WRITABLE`               | no write permission                            |
 | unpack | `VARIABLE_MISSING`                  | required variable has no value                 |
 | unpack | `VARIABLE_INVALID_FORMAT`           | value is not a well-formed name token          |
+| unpack | `VARIABLE_UNKNOWN`                  | `--var` names a variable the template lacks    |
+| unpack | `RENAME_COLLISION`                  | two entries would land on the same path        |
 
 ⚠ = warning; does not block.
 
+Every warning is reported at **both** pack and unpack. A template is usually
+unpacked by someone other than its author, so a warning that only reached
+whoever packed it reached nobody.
+
 Phase order — pack: `Manifest → Project`; unpack:
-`Archive → Manifest → Target → Variables`. The first failing phase aborts
+`Archive → Manifest → Target → Variables → Rename`. The first failing phase aborts
 before the next runs. Target precedes variables so an interactive unpack does
 not make you answer every prompt before learning the destination is occupied.
 

@@ -36,8 +36,16 @@ manifest beside it rather than as placeholders in the source.
   matches packing is refused, at or above 5% it warns, naming the identifiers
   it would corrupt.
 - Archive entries that would escape the target directory are rejected.
+- Two entries that would land on the same path are rejected before anything is
+  written. Substitution rewrites paths, so a `path_renames` pair or a token
+  whose casings converge can point two files at one destination; the writer
+  would have kept only the last, unpacking an archive into fewer files than it
+  holds without saying so.
+- A `--var` naming a variable the template does not declare is an error. It
+  used to be dropped, leaving the variable on its default and scaffolding a
+  wrong project with exit 0.
 - Every phase is validated with structured, stable codes; warnings reach
-  stderr rather than being discarded.
+  stderr at both pack and unpack, rather than only reaching whoever packed.
 
 ### Preview
 
