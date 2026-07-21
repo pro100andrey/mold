@@ -103,11 +103,13 @@ class Manifest {
     this.noSubstitute = const [],
     this.binaryExtensions = const [],
     this.source,
+    this.path,
   });
 
   /// Parses a manifest from raw YAML [text]. [source] defaults to [text] so the
-  /// original bytes can be embedded into the archive.
-  factory Manifest.fromYaml(String text) {
+  /// original bytes can be embedded into the archive; [path] records where the
+  /// text came from, when it came from a file.
+  factory Manifest.fromYaml(String text, {String? path}) {
     final doc = loadYaml(text);
     if (doc is! YamlMap) {
       throw const FormatException('Manifest must be a YAML mapping.');
@@ -123,6 +125,7 @@ class Manifest {
       noSubstitute: _stringList(doc['no_substitute']),
       binaryExtensions: _stringList(doc['binary_extensions']),
       source: text,
+      path: path,
     );
   }
 
@@ -133,7 +136,7 @@ class Manifest {
       throw FormatException('Manifest not found: $path');
     }
 
-    return .fromYaml(file.readAsStringSync());
+    return .fromYaml(file.readAsStringSync(), path: path);
   }
 
   /// Template name; also the default output file stem.
@@ -163,6 +166,14 @@ class Manifest {
   /// The verbatim YAML this manifest was parsed from, when available. Embedded
   /// into the archive as `mold.yaml`.
   final String? source;
+
+  /// The file this manifest was read from, when available.
+  ///
+  /// Provenance, like [source] — not a manifest field, so it is neither
+  /// emitted by [toYaml] nor part of equality. `ProjectValidator` uses it to
+  /// exclude the manifest from its own token search: a `replaces:` line is not
+  /// evidence that the project uses the token.
+  final String? path;
 
   /// Every glob pattern this manifest declares, in one place.
   ///

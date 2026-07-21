@@ -201,7 +201,11 @@ variables:
     description: Org id
     replaces: super_server
 ''');
-      File(p.join(project.path, 'main.dart')).writeAsStringSync('x\n');
+      // Real content: the manifest no longer vouches for its own token, so
+      // the project must actually contain it.
+      File(
+        p.join(project.path, 'main.dart'),
+      ).writeAsStringSync('// super_server\n');
 
       final archive = p.join(tmp.path, 'out.mold');
       expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);

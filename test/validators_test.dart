@@ -248,9 +248,10 @@ variables:
     });
 
     group('warns', () {
-      test('PROJECT_PARTIAL_OVERLAP on partial-name overlap', () {
-        // 'server' only ever appears inside 'observer' — overlap, not absent.
-        writeFile('a.txt', 'class observer {}');
+      test('PROJECT_PARTIAL_OVERLAP on light overlap', () {
+        // 9 standalone uses to 1 buried in 'observer' = 10%: over the 5%
+        // warning floor, under the 30% error threshold.
+        writeFile('a.txt', '${'server ' * 9}class observer {}');
         final r = validator.validate(
           ProjectInput(dir: tmp.path, manifest: withVar('server')),
         );
