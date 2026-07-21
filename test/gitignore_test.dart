@@ -171,4 +171,101 @@ void main() {
       expect(Manifest.fromYaml(on.toYaml()), equals(on));
     });
   });
+
+  group('GitignoreRules regressions', () {
+    late Directory tmp;
+
+    setUp(() => tmp = Directory.systemTemp.createTempSync('mold_girx_'));
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    void write(String rel, String content) {
+      File('${tmp.path}/$rel')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync(content);
+    }
+
+    test('a degenerate line does not crash the parser', () {
+      // A lone `/` left an empty pattern that the anchor check then indexed
+      // past the end of, throwing RangeError out of the CLI as an unhandled
+      // error — exit 255 with a stack trace.
+      for (final line in ['/', '!/', '//', '!', '   ', '#', '\n']) {
+        write('.gitignore', '$line\n');
+        expect(
+          () => GitignoreRules.load(tmp.path),
+          returnsNormally,
+          reason: 'line: ${line.replaceAll('\n', r'\n')}',
+        );
+      }
+    });
+
+    test('a ! cannot re-include a file under an excluded directory', () {
+      // git: "It is not possible to re-include a file if a parent directory
+      // of that file is excluded." Verified against `git check-ignore`.
+      write('.gitignore', 'build/\n!build/keep.txt\n');
+
+      expect(GitignoreRules.load(tmp.path).isIgnored('build/keep.txt'), isTrue);
+    });
+
+    test('a ! still works at the same level', () {
+      write('.gitignore', '*.pbxuser\n!default.pbxuser\n');
+
+      final rules = GitignoreRules.load(tmp.path);
+      expect(rules.isIgnored('x.pbxuser'), isTrue);
+      expect(rules.isIgnored('default.pbxuser'), isFalse);
+    });
+
+    test('a ! rescues a file under a directory that is not excluded', () {
+      write('.gitignore', '*.log\n!keep/important.log\n');
+
+      final rules = GitignoreRules.load(tmp.path);
+      expect(rules.isIgnored('keep/other.log'), isTrue);
+      expect(rules.isIgnored('keep/important.log'), isFalse);
+    });
+
+    test('a directory rule does not match a file of the same name', () {
+      write('.gitignore', 'build/\n');
+
+      final rules = GitignoreRules.load(tmp.path);
+      expect(rules.isIgnored('build/x.o'), isTrue);
+      expect(
+        rules.isIgnored('build'),
+        isFalse,
+        reason: 'a trailing-slash rule is directories only',
+      );
+    });
+
+    test('an excluded ancestor several levels up still wins', () {
+      write('.gitignore', 'a/\n!a/b/c/keep.txt\n');
+
+      expect(
+        GitignoreRules.load(tmp.path).isIgnored('a/b/c/keep.txt'),
+        isTrue,
+      );
+    });
+
+    test('a pattern with many **/ segments does not explode', () {
+      write('.gitignore', '**/a/**/b/**/c/**/d/**/e/**/f\n');
+
+      // Bounded expansion: the load completes rather than compiling an
+      // exponential number of globs.
+      expect(() => GitignoreRules.load(tmp.path), returnsNormally);
+    });
+
+    test('fromListing agrees with load', () {
+      write('.gitignore', 'build/\n*.log\n');
+      write('build/x.o', '');
+      write('a.log', '');
+      write('keep.txt', '');
+
+      final walked = GitignoreRules.load(tmp.path);
+      final shared = GitignoreRules.fromListing(
+        tmp.path,
+        Directory(tmp.path).listSync(recursive: true, followLinks: false),
+      );
+
+      for (final path in ['build/x.o', 'a.log', 'keep.txt']) {
+        expect(shared.isIgnored(path), walked.isIgnored(path), reason: path);
+      }
+    });
+  });
 }

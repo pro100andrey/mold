@@ -99,15 +99,18 @@ class FileScanner {
     // containment check below fail.
     final canonicalRoot = root.resolveSymbolicLinksSync();
 
+    // Walked once. GitignoreRules reads the .gitignore files out of this same
+    // listing rather than doing its own recursive walk of the same tree.
+    final entities = root.listSync(recursive: true, followLinks: false);
     final ignored = useGitignore
-        ? GitignoreRules.load(sourceDir)
+        ? GitignoreRules.fromListing(sourceDir, entities)
         : const GitignoreRules.empty();
 
     final matches = <String>[];
     final executable = <String>{};
     final skipped = <String, SkipReason>{};
     var gitignored = 0;
-    for (final entity in root.listSync(recursive: true, followLinks: false)) {
+    for (final entity in entities) {
       // Type first: directories are neither packed nor reported, so matching
       // them against every glob is pure waste.
       final isFile = entity is File;
@@ -116,11 +119,14 @@ class FileScanner {
       }
 
       final rel = _relative(entity.path, sourceDir);
-      if (!_isIncluded(rel) || _isExcluded(rel)) {
-        continue;
-      }
+      // Asked first, so a file caught by both filters is still reported as
+      // gitignored — the tally is what someone auditing "why is this file
+      // missing" reads, and attributing it to `exclude` alone understates it.
       if (ignored.isIgnored(rel)) {
         gitignored++;
+        continue;
+      }
+      if (!_isIncluded(rel) || _isExcluded(rel)) {
         continue;
       }
 
