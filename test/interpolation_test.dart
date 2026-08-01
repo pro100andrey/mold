@@ -151,6 +151,50 @@ void main() {
       );
     });
 
+    test('pathCase keeps a package directory in step with the org', () async {
+      // The Kotlin sources sit at a path that spells out the package, so the
+      // directory has to move with it. One `org` variable feeds both: the
+      // declaration as written, the directory through pathCase. A second
+      // `org_path` variable could disagree with the first; this cannot.
+      write(
+        'android/app/src/main/kotlin/com/example/MainActivity.kt',
+        'package com.example\n',
+      );
+      final archive = await const Bundler().bundle(
+        projectDir: src.path,
+        manifest: Manifest.fromYaml('''
+name: t
+version: 1
+variables:
+  org:
+    description: The organisation, in reverse-domain form
+    default: com.example
+extra_substitutions:
+  - from: com.example
+    to: "{{ org }}"
+path_renames:
+  - from: android/app/src/main/kotlin/com/example
+    to: android/app/src/main/kotlin/{{ org | pathCase }}
+'''),
+      );
+      final out = Directory('${tmp.path}/out');
+      await const Unbundler().unbundleBytes(
+        source: archive,
+        targetDir: out.path,
+        vars: const {'org': 'com.acmeCorp'},
+      );
+
+      // Two segments, spelling intact — a word-splitting transform would have
+      // landed this under com/acme/corp/.
+      expect(
+        read(
+          out,
+          'android/app/src/main/kotlin/com/acmeCorp/MainActivity.kt',
+        ).trim(),
+        'package com.acmeCorp',
+      );
+    });
+
     test('an explicit substitution beats a colliding rename key', () async {
       write('a.txt', 'flutter_application\n');
       final archive = await const Bundler().bundle(

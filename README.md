@@ -293,14 +293,15 @@ Only the `to:` side of a substitution or path rename is a template.
 {{{{                           a literal "{{"
 ```
 
-| transform       | `my_project` becomes |
-| --------------- | -------------------- |
-| `snakeCase`     | `my_project`         |
-| `kebabCase`     | `my-project`         |
-| `camelCase`     | `myProject`          |
-| `pascalCase`    | `MyProject`          |
-| `screamingCase` | `MY_PROJECT`         |
-| `titleCase`     | `My Project`         |
+| transform       | value        | becomes      |
+| --------------- | ------------ | ------------ |
+| `snakeCase`     | `my_project` | `my_project` |
+| `kebabCase`     | `my_project` | `my-project` |
+| `camelCase`     | `my_project` | `myProject`  |
+| `pascalCase`    | `my_project` | `MyProject`  |
+| `screamingCase` | `my_project` | `MY_PROJECT` |
+| `titleCase`     | `my_project` | `My Project` |
+| `pathCase`      | `com.acme`   | `com/acme`   |
 
 Whitespace inside the braces is insignificant. Chaining (`{{ a | x | y }}`) is
 refused rather than read as a transform named `x | y`.
@@ -310,6 +311,14 @@ the project name while Android keeps it snake, so one name yields
 `com.example.myProject` **and** `com.example.my_project` in the same project —
 plus `My Project` for the home-screen label. The four casings cover one of the
 three; named transforms cover the rest.
+
+The Android sources are the same fact one level up: they live in
+`android/app/src/main/kotlin/com/example/…`, a directory path spelling out the
+package the organisation names. `pathCase` derives that path from the
+organisation itself — `com.acme` → `com/acme` — so the two cannot be set
+inconsistently. It is the one transform that is not a case conversion: segments
+keep the spelling they were given, so `com.acmeCorp` is `com/acmeCorp`, not
+`com/acme/corp`.
 
 Templates are validated at pack time *and* again at unpack, so a bad
 placeholder or an undeclared variable fails when the template is built, not

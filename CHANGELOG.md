@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.2
+
+- A seventh transform, `pathCase`: `com.acme` → `com/acme`. It derives the
+  directory that holds a package — `android/app/src/main/kotlin/com/example/…`
+  — from the organisation that names it, so the path and the package cannot be
+  set inconsistently the way two separate variables could be.
+
+  Unlike the other six it is not a case conversion but a `.` → `/` swap:
+  segments keep the spelling they were given, so `com.acmeCorp` yields
+  `com/acmeCorp`, not `com/acme/corp`. Empty segments are dropped, and a value
+  with no dots is returned unchanged.
+
+- **Breaking, technically.** `CaseTransform` is exported from `lib/mold.dart`,
+  so a new enum value fails compilation for anyone switching over it
+  exhaustively. Nothing else changed, and manifests are unaffected.
+
 ## 0.1.1
 
 No API or behaviour changes — `lib/` is identical to 0.1.0.

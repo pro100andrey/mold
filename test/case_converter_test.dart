@@ -50,6 +50,38 @@ void main() {
       });
     });
 
+    group('renders a package path', () {
+      test('a dotted package becomes a directory path', () {
+        expect(c.toPath('com.acme'), 'com/acme');
+        expect(c.toPath('com.example.my_project'), 'com/example/my_project');
+      });
+
+      test('segments keep their spelling — this is not a casing', () {
+        // Via splitWords this would be com/acme/corp: three segments where the
+        // package has two, and the capital gone.
+        expect(c.toPath('com.acmeCorp'), 'com/acmeCorp');
+        expect(c.toPath('com.ACME'), 'com/ACME');
+      });
+
+      test('a token with no dots is returned unchanged', () {
+        expect(c.toPath('acme'), 'acme');
+        expect(c.toPath('acmeCorp'), 'acmeCorp');
+      });
+
+      test('empty segments are dropped', () {
+        expect(c.toPath('com..acme'), 'com/acme');
+        expect(c.toPath('.acme'), 'acme');
+        expect(c.toPath('acme.'), 'acme');
+        expect(c.toPath('.'), '');
+        expect(c.toPath(''), '');
+      });
+
+      test('an already-converted path is left alone', () {
+        expect(c.toPath('com/acme'), 'com/acme');
+        expect(c.toPath(c.toPath('com.acme')), 'com/acme');
+      });
+    });
+
     group('builds a replacement table', () {
       test('one entry per casing', () {
         expect(c.replacements('super_server', 'my_project'), {
@@ -91,6 +123,14 @@ void main() {
       expect(CaseTransform.pascalCase.apply('my_project'), 'MyProject');
       expect(CaseTransform.screamingCase.apply('my_project'), 'MY_PROJECT');
       expect(CaseTransform.titleCase.apply('my_project'), 'My Project');
+      expect(CaseTransform.pathCase.apply('com.acme'), 'com/acme');
+    });
+
+    test('pathCase converts separators, it does not re-word', () {
+      expect(CaseTransform.pathCase.apply('com.acmeCorp'), 'com/acmeCorp');
+      expect(CaseTransform.pathCase.apply('acme'), 'acme');
+      expect(CaseTransform.pathCase.apply('com..acme'), 'com/acme');
+      expect(CaseTransform.pathCase.apply('com/acme'), 'com/acme');
     });
 
     test('accepts any source spelling', () {

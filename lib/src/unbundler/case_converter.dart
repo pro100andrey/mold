@@ -49,6 +49,20 @@ class CaseConverter {
   /// `Title Case`
   String toTitle(String token) => splitWords(token).map(_capitalize).join(' ');
 
+  /// `com.acme` → `com/acme`
+  ///
+  /// The one conversion here that is not a casing: a dotted package name
+  /// becomes the directory path holding it, and each segment keeps the
+  /// spelling it was written with. Deliberately not built on [splitWords],
+  /// which lexes and lowercases — `com.acmeCorp` would come back as
+  /// `com/acme/corp`, three segments where the package has two.
+  ///
+  /// Empty segments — `com..acme`, or a leading or trailing dot — are dropped,
+  /// so the result never carries an empty path component. A token with no dots
+  /// is returned unchanged, which makes an already-converted path idempotent.
+  String toPath(String token) =>
+      token.split('.').where((segment) => segment.isNotEmpty).join('/');
+
   /// Builds the replacement table mapping each of the four casings of [from] to
   /// the matching casing of [to]. Empty keys (degenerate tokens) are dropped.
   ///

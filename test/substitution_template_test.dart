@@ -63,6 +63,19 @@ void main() {
       expectRenders('{{ project_name | pascalCase }}', vars, 'MyProject');
       expectRenders('{{ project_name | screamingCase }}', vars, 'MY_PROJECT');
       expectRenders('{{ project_name | titleCase }}', vars, 'My Project');
+      expectRenders(
+        '{{ org | pathCase }}',
+        const {'org': 'com.acme'},
+        'com/acme',
+      );
+    });
+
+    test('pathCase reaches a package directory, spelling intact', () {
+      expectRenders(
+        'android/app/src/main/kotlin/{{ org | pathCase }}',
+        const {'org': 'com.acmeCorp'},
+        'android/app/src/main/kotlin/com/acmeCorp',
+      );
     });
 
     test('placeholders mix with surrounding literals', () {

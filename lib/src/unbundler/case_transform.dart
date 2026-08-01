@@ -7,8 +7,8 @@ import 'case_converter.dart';
 /// is `CaseTransform.values.byName(...)` and the "valid transforms are …"
 /// message is generated from `values`. Neither can drift from this list.
 ///
-/// Adding one — `dotCase`, `pathCase` — is one value here plus one method on
-/// [CaseConverter].
+/// Adding one — `dotCase`, the inverse of [pathCase] — is one value here plus
+/// one method on [CaseConverter].
 enum CaseTransform {
   /// `my_project`
   snakeCase,
@@ -26,7 +26,16 @@ enum CaseTransform {
   screamingCase,
 
   /// `My Project`
-  titleCase;
+  titleCase,
+
+  /// `com.acme` → `com/acme`
+  ///
+  /// The one transform that is not a case conversion: it swaps `.` for `/` and
+  /// leaves every segment spelled as written, because a package path is a
+  /// sequence of identifiers rather than a token to be re-worded. Do not
+  /// "regularise" it onto [CaseConverter.splitWords] like its neighbours —
+  /// that is what it exists to avoid.
+  pathCase;
 
   /// Applies this transform to [value].
   String apply(String value) {
@@ -38,6 +47,7 @@ enum CaseTransform {
       .pascalCase => converter.toPascal(value),
       .screamingCase => converter.toScreamingSnake(value),
       .titleCase => converter.toTitle(value),
+      .pathCase => converter.toPath(value),
     };
   }
 
