@@ -23,6 +23,12 @@ class ArchiveWriter {
   static const _regular = 420; // 0644
   static const _executable = 493; // 0755
 
+  /// Tar mtime for every entry. A template's identity is its content, not the
+  /// moment it was packed, and `package:archive` defaults the field to
+  /// `DateTime.now()` — so leaving it unset makes two packs of the same tree
+  /// differ in both bytes and length.
+  static const _modTime = 0;
+
   /// Builds the gzipped tar bytes from the manifest [manifestYaml] and the
   /// captured [files] (relative path → bytes).
   ///
@@ -30,6 +36,12 @@ class ArchiveWriter {
   /// scripts and hooks survive a pack/unpack round trip; everything else gets
   /// 0644. Only the executable bit is carried — the rest of the source mode is
   /// deliberately not reproduced.
+  ///
+  /// Entry timestamps are fixed at the epoch rather than read from the clock,
+  /// so packing the same tree twice yields identical bytes — what a `--format
+  /// bytes` blob committed beside the code needs, and what a template archive
+  /// under version control needs. Nothing reads them back: the reader drops
+  /// them, and unpacking writes files fresh.
   List<int> write({
     required String manifestYaml,
     required Map<String, List<int>> files,
@@ -53,5 +65,7 @@ class ArchiveWriter {
   }
 
   ArchiveFile _entry(String name, List<int> bytes, int mode) =>
-      ArchiveFile(name, bytes.length, bytes)..mode = mode;
+      ArchiveFile(name, bytes.length, bytes)
+        ..mode = mode
+        ..lastModTime = _modTime;
 }

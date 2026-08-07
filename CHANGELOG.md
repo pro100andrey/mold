@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.3
+
+- **Archives are reproducible.** Every tar entry used to carry the wall-clock
+  time of the pack, so packing one unchanged tree twice produced two different
+  archives — different bytes, and different lengths, because a different set of
+  timestamps compresses differently. Entry timestamps are now fixed at the
+  epoch.
+
+  It matters most where an archive is committed: `pack --format bytes|base64`
+  writes the whole thing into a generated Dart source, and without this every
+  regeneration was a whole-file diff over a template nobody had touched.
+
+  A template's identity is its content, not the moment it was packed — the same
+  reasoning that already keeps everything but the executable bit out of the
+  recorded file mode.
+
+- Archives packed by earlier versions are unaffected: entry timestamps were
+  never read back. The reader discards them and unpacking writes files fresh.
+
 ## 0.1.2
 
 - A seventh transform, `pathCase`: `com.acme` → `com/acme`. It derives the
