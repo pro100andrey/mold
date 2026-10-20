@@ -135,7 +135,7 @@ class PackCommand extends Command<int> {
 
       final packVars = _parseVars(results['var'] as List<String>);
       if (results['diff'] as bool) {
-        return _previewPack(sourceDir, manifest, packVars);
+        return await _previewPack(sourceDir, manifest, packVars);
       }
 
       if (packVars.isNotEmpty) {
