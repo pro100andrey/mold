@@ -19,10 +19,17 @@ import 'project_validator.dart';
 /// [ValidationException] carrying stable codes; a failing filesystem throws an
 /// [IOException].
 class Bundler {
-  const Bundler({this.compressionLevel = ArchiveWriter.defaultLevel});
+  const Bundler({
+    this.compressionLevel = ArchiveWriter.defaultLevel,
+    this.fastCompression = false,
+  });
 
   /// The gzip level, 0 (store) to 9 (smallest). See [ArchiveWriter].
   final int compressionLevel;
+
+  /// Compress with the VM's zlib: about 2.7x faster, but the bytes may differ
+  /// across platforms and SDKs. See [ArchiveWriter].
+  final bool fastCompression;
 
   /// Packs [projectDir] per [manifest] and returns the archive bytes.
   ///
@@ -85,7 +92,10 @@ class Bundler {
     // rendered by the Manifest itself, which knows all of its fields.
     final manifestYaml = manifest.source ?? manifest.toYaml();
 
-    return ArchiveWriter(compressionLevel: compressionLevel).write(
+    return ArchiveWriter(
+      compressionLevel: compressionLevel,
+      fastCompression: fastCompression,
+    ).write(
       manifestYaml: manifestYaml,
       files: files,
       executable: scan.executable,

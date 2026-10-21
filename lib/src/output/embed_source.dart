@@ -58,6 +58,51 @@ class EmbedSource {
     return (buffer..writeln('];')).toString();
   }
 
+  /// The archive bytes in [source], a source rendered by [bytesSource] or
+  /// [base64Source]; null when it holds neither shape.
+  ///
+  /// What `pack --check` compares a committed source by: the archive inside
+  /// it, not the text around it.
+  List<int>? archiveOf(String source) {
+    final list = _bytesList.firstMatch(source);
+    if (list != null) {
+      final values = <int>[];
+      for (final line in list[1]!.split('\n')) {
+        final code = line.trim();
+        if (code.isEmpty || code.startsWith('//')) {
+          continue;
+        }
+        for (final item in code.split(',')) {
+          if (item.trim().isEmpty) {
+            continue;
+          }
+          final value = int.tryParse(item.trim());
+          if (value == null || value < 0 || value > 255) {
+            return null;
+          }
+          values.add(value);
+        }
+      }
+
+      return values;
+    }
+
+    final encoded = _base64Literal.firstMatch(source);
+    if (encoded == null) {
+      return null;
+    }
+    try {
+      return base64.decode(encoded[1]!);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  static final _bytesList = RegExp(r'= <int>\[\n(.*?)\];', dotAll: true);
+  static final _base64Literal = RegExp(
+    r"Base64 =\s*'([A-Za-z0-9+/=]*)';",
+  );
+
   /// A Dart source declaring a base64 `const String kXxxTemplateBase64`.
   String base64Source({required List<int> archive, required String name}) {
     final declaration = 'const String ${constName(name)}Base64 =';

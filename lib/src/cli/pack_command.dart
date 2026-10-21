@@ -4,6 +4,9 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:path/path.dart' as p;
 
+import '../archive/archive_diff.dart';
+import '../archive/archive_reader.dart';
+import '../archive/archive_validator.dart';
 import '../archive/archive_writer.dart';
 import '../bundler/bundler.dart';
 import '../bundler/project_validator.dart';
@@ -46,6 +49,13 @@ class PackCommand extends MoldCommand {
         'level',
         help: 'gzip level, 0 (store, fastest) to 9 (smallest).',
         defaultsTo: '${ArchiveWriter.defaultLevel}',
+      )
+      ..addFlag(
+        'fast',
+        negatable: false,
+        help:
+            "Compress with the Dart VM's zlib: ~2.7x faster, but the bytes may "
+            'differ across OS and SDK versions.',
       );
     addVarOptions(', for previewing with --diff');
     argParser
@@ -120,6 +130,7 @@ class PackCommand extends MoldCommand {
 
     final archive = await Bundler(
       compressionLevel: level,
+      fastCompression: results['fast'] as bool,
     ).bundle(projectDir: sourceDir, manifest: manifest, onWarning: warn);
     // One stem drives both the file name and the generated const identifier;
     // rendering from manifest.name here would make `-n foo` write foo.dart
@@ -131,7 +142,7 @@ class PackCommand extends MoldCommand {
     final outputPath = (results['output'] as String?) ?? './$stem.$ext';
 
     if (check) {
-      return _check(outputPath, content);
+      return _check(outputPath, format, stem, archive);
     }
 
     File(outputPath)
@@ -146,31 +157,88 @@ class PackCommand extends MoldCommand {
     return 0;
   }
 
-  /// Compares [content] with the file at [outputPath], writing nothing.
+  /// Whether the file at [outputPath] holds what packing would write now,
+  /// writing nothing.
   ///
-  /// Meaningful only because packing is reproducible: the same tree and
-  /// manifest at the same level give the same bytes, so a difference means
-  /// the committed file is stale, never that the clock moved.
-  int _check(String outputPath, List<int> content) {
-    final file = File(outputPath);
-    final current = file.existsSync() ? file.readAsBytesSync() : null;
-    final upToDate = current != null && sameBytes(current, content);
+  /// Compared by content, not by bytes. The archive is unpacked from the
+  /// committed file — from inside the Dart source, for an embed format — and
+  /// its manifest, files and executable bits compared with [archive]'s. A
+  /// byte comparison failed whenever the compressor differed while the
+  /// content did not: another OS, another Dart SDK, another `--level`.
+  ///
+  /// An embed source must also be exactly what this mold renders around the
+  /// archive it holds — the declaration's name, the layout, the header — so a
+  /// changed `-n` or a newer mold's rendering is stale too.
+  int _check(
+    String outputPath,
+    OutputFormat format,
+    String stem,
+    List<int> archive,
+  ) {
+    final reasons = _staleness(outputPath, format, stem, archive);
+    final upToDate = reasons.isEmpty;
 
     if (wantsJson) {
-      emitJson({'output': outputPath, 'upToDate': upToDate});
+      emitJson({'output': outputPath, 'upToDate': upToDate, 'stale': reasons});
     } else if (upToDate) {
       err.writeln('Up to date: $outputPath.');
     } else {
       err.writeln(
-        current == null
-            ? 'Stale: $outputPath does not exist. Run without --check to '
-                  'write it.'
-            : 'Stale: $outputPath differs from what packing writes now. Run '
-                  'without --check to regenerate it.',
+        'Stale: $outputPath — ${reasons.join('; ')}. Run without --check to '
+        'regenerate it.',
       );
     }
 
     return upToDate ? 0 : 1;
+  }
+
+  /// Why [outputPath] is not what packing writes now; empty when it is.
+  List<String> _staleness(
+    String outputPath,
+    OutputFormat format,
+    String stem,
+    List<int> archive,
+  ) {
+    final file = File(outputPath);
+    if (!file.existsSync()) {
+      return ['it does not exist'];
+    }
+    final bytes = file.readAsBytesSync();
+
+    final List<int> committed;
+    final reasons = <String>[];
+    if (format == .tarGz) {
+      committed = bytes;
+    } else {
+      final String text;
+      try {
+        text = utf8.decode(bytes);
+      } on FormatException {
+        return ['it is not a Dart source'];
+      }
+      final embedded = const EmbedSource().archiveOf(text);
+      if (embedded == null) {
+        return ['it holds no ${format.flag} archive mold would write'];
+      }
+      committed = embedded;
+      if (!sameBytes(_render(format, embedded, stem), bytes)) {
+        reasons.add(
+          'the source around the archive differs (its name, layout or the '
+          'mold version that wrote it)',
+        );
+      }
+    }
+
+    final inspected = const ArchiveValidator().inspect(committed);
+    if (inspected.tar == null || !inspected.result.isValid) {
+      return [...reasons, 'its archive is not a valid template'];
+    }
+    final diff = ArchiveDiff(
+      const ArchiveReader().fromTar(inspected.tar!),
+      const ArchiveReader().read(archive),
+    );
+
+    return [...reasons, ...diff.describe()];
   }
 
   /// Validates and reports what a pack would capture, without writing.

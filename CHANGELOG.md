@@ -39,9 +39,10 @@ adding what regenerating a project needs.
 
 ### Faster, leaner
 
-Measured on `packages/flutter` (1731 files, 48 MB): unpack 1.2 s → 0.39 s,
-plan 1.1 s → 0.33 s, pack 1.33 s → 1.09 s (with the new checks below),
-peak memory 546 → ~250–300 MB.
+Measured on `packages/flutter` (1731 files, 48 MB): unpack 1.2 s → 0.41 s,
+plan 1.1 s → 0.34 s, peak memory 546 → ~300–360 MB. Pack is 1.33 s → 2.2 s:
+the checks below add ~0.13 s, and the portable deflate (see *Reproducible
+across platforms*) ~1.1 s — `--fast` brings it to ~1.1 s.
 
 - Reading an archive copied every file into a boxed `List<int>` — eight bytes
   per byte, most of an unpack. Files are now views into the tar.
@@ -53,6 +54,28 @@ peak memory 546 → ~250–300 MB.
   alone keeps the archive's buffer rather than a re-encoded copy.
 - gzip is most of what remains of a pack: `--level` / `compressionLevel`
   trades it for size, and the archive stays reproducible at any one level.
+
+### Reproducible across platforms
+
+0.1.3 made packing reproducible — on one machine. The compressor was the
+zlib built into the Dart VM, which writes a per-platform OS byte into every
+gzip header (3 on Linux) and whose deflate output can vary by platform and
+SDK, so a `-f bytes` source committed on macOS and regenerated on Linux was a
+whole-file diff.
+
+- Compression now uses `package:archive`'s pure-Dart deflate, the same code
+  on every platform, and every gzip header is rewritten to one fixed value
+  (no mtime — the pure-Dart encoder stamped the clock there — and OS
+  "unknown"). Golden archives committed under `test/golden/` are checked
+  byte for byte on Linux, macOS and Windows in CI.
+- The cost is about 2.7x at the gzip step — 1.8 s against 0.66 s for a 48 MB
+  tar, milliseconds for a template of ordinary size. `--fast` /
+  `fastCompression: true` keeps the VM's zlib.
+- `pack --check` compares **content**: it unpacks the committed archive —
+  from inside the Dart source, for embed formats — and compares manifest,
+  files and executable bits, naming what changed. It used to compare
+  compressed bytes, so another OS, SDK or `--level` reported a current file
+  as stale.
 
 ### Sharper checks
 

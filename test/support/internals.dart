@@ -7,6 +7,7 @@ export 'package:mold/src/archive/archive_codec.dart'
         ArchiveTooLargeException,
         decodeGzipBounded,
         defaultMaxDecompressedBytes;
+export 'package:mold/src/archive/archive_diff.dart' show ArchiveDiff;
 export 'package:mold/src/archive/archive_path.dart' show isContainedArchivePath;
 export 'package:mold/src/archive/archive_reader.dart'
     show ArchiveReader, BundleArchive;

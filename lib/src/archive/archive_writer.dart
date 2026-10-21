@@ -17,11 +17,30 @@ import 'package:archive/archive.dart';
 /// a problem in practice; packing a tree of many gigabytes would need a
 /// streaming encoder writing straight to a file, and a different signature.
 ///
-/// **Time.** gzip is most of a pack — about 590 ms of 1.3 s for a 48 MB
-/// corpus at the default level. [compressionLevel] trades it for size; the
-/// archive stays reproducible at any one level.
+/// **Reproducible everywhere.** The same tree and manifest at the same level
+/// give the same bytes on any OS and Dart SDK — for one version of mold and
+/// of `package:archive`. Two things in a gzip stream would otherwise depend on
+/// the machine:
+///
+/// - the deflate stream itself, when it comes from the zlib built into the
+///   Dart VM: its output may differ across zlib versions and CPUs. The
+///   default compressor is `package:archive`'s pure-Dart deflate, which runs
+///   the same code everywhere;
+/// - the 10-byte gzip header, whose OS byte zlib sets per platform (3 on
+///   Linux; macOS and Windows have their own) and whose mtime the pure-Dart
+///   encoder sets to the clock. Every header is rewritten to one fixed
+///   value — see [_header].
+///
+/// **Time.** gzip is most of a pack. The pure-Dart deflate is about 2.7x the
+/// VM's zlib: 1.8 s against 0.66 s for a 48 MB tar at level 6 — milliseconds
+/// for a template of ordinary size. [fastCompression] uses zlib, and gives up
+/// cross-platform byte equality for it (not reproducibility on one machine,
+/// and not `pack --check`, which compares content).
 class ArchiveWriter {
-  const ArchiveWriter({this.compressionLevel = defaultLevel});
+  const ArchiveWriter({
+    this.compressionLevel = defaultLevel,
+    this.fastCompression = false,
+  });
 
   /// zlib's own default, a balance of speed and size.
   static const defaultLevel = 6;
@@ -29,6 +48,16 @@ class ArchiveWriter {
   /// The gzip level, 0 (store) to 9 (smallest). Anything else is a
   /// [RangeError] from [write].
   final int compressionLevel;
+
+  /// Whether to compress with the VM's zlib — faster, but its bytes may
+  /// differ from one platform or SDK to another.
+  final bool fastCompression;
+
+  /// The gzip header every archive gets: magic, deflate, no flags, mtime 0,
+  /// no extra-flags hint, OS 255 ("unknown"). Nothing reads these fields back,
+  /// and each encoder fills them differently — the OS byte per platform, the
+  /// mtime from the clock, the extra flags per level.
+  static const _header = [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255];
 
   /// Tar mode for a regular file, and for one that is owner-executable.
   static const _regular = 420; // 0644
@@ -75,7 +104,17 @@ class ArchiveWriter {
     RangeError.checkValueInInterval(compressionLevel, 0, 9, 'compressionLevel');
     final tar = TarEncoder().encode(archive);
 
-    return const GZipEncoder().encodeBytes(tar, level: compressionLevel);
+    final gzip = fastCompression
+        ? const GZipEncoder().encodeBytes(tar, level: compressionLevel)
+        : const GZipEncoderWeb().encodeBytes(tar, level: compressionLevel);
+    // Flags 0 means the header is exactly these ten bytes — no name, comment
+    // or extra field follows — so overwriting them in place is safe.
+    if (gzip[3] != 0) {
+      throw StateError('Unexpected gzip header flags: ${gzip[3]}.');
+    }
+    gzip.setAll(0, _header);
+
+    return gzip;
   }
 
   ArchiveFile _entry(String name, List<int> bytes, int mode) =>

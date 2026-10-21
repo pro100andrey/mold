@@ -116,6 +116,7 @@ mold pack <source_dir> [options]
   --name,     -n   Output file name stem      (also names the embedded const)
   --format,   -f   tar.gz | bytes | base64    (default: tar.gz)
   --level          gzip level 0-9             (default: 6)
+  --fast           zlib instead of pure-Dart deflate (faster; bytes vary by OS)
   --var,      -v   key=value                  (repeatable, for --diff)
   --vars-file      YAML/JSON values, or a stamp (for --diff)
   --dry-run        Validate and list what would be captured, without writing
@@ -184,16 +185,37 @@ inspects cleanly can fail an unpack only on its variables or its target.
 
 ### Checking a committed archive in CI
 
-Packing is reproducible — the same tree and manifest at the same `--level`
-give the same bytes — so a committed archive or embed source can be checked
-rather than trusted:
-
 ```sh
 mold pack ./templates/app -f bytes -o lib/src/template.dart --check
 ```
 
-Exit 0 when the file is what packing writes now, 1 when it is stale or
-missing. Nothing is written.
+Exit 0 when the file holds what packing would write now, 1 when it is stale or
+missing — with what changed: `1 changed (lib/main.dart); 1 added (…)`.
+Nothing is written.
+
+The comparison is by **content**: the archive is unpacked from the committed
+file (from inside the Dart source, for `-f bytes|base64`) and its manifest,
+files and executable bits compared with the project's. Compressed bytes are
+not compared, so a file written on another OS, by another Dart SDK, at another
+`--level` or with `--fast` is not called stale when its content is current.
+An embed source must also be exactly what this mold renders around its
+archive, so a changed `-n` or a newer mold's layout is stale too.
+
+### Reproducible archives
+
+Packing the same tree and manifest at the same `--level` gives the same bytes
+on any OS and Dart SDK — for a given version of mold and `package:archive` —
+so regenerating a committed `-f bytes` source on another machine is an empty
+diff. Two things are pinned for it: compression uses `package:archive`'s
+pure-Dart deflate rather than the zlib built into the VM, whose output can
+vary by platform; and every gzip header is the same ten bytes (no mtime, OS
+"unknown"), where zlib writes a per-platform OS byte. CI checks this on Linux,
+macOS and Windows against committed golden archives.
+
+`--fast` compresses with the VM's zlib instead: about 2.7x faster at that
+step (0.66 s against 1.8 s for a 48 MB tar), still reproducible on one
+machine, and still fine for `--check` — but no longer byte-identical across
+platforms.
 
 ### Regenerating a project
 
@@ -904,8 +926,8 @@ final dartSource = const EmbedSource()
 The archive is materialized in memory — no scratch directory is written to
 disk, and `pack` never mutates the source. Unpacking keeps each file as a view
 into the decompressed archive, and copies only the files substitution changes.
-On a 48 MB, 1731-file corpus: pack ~1.1 s (over half of it gzip; `--level`
-trades it), unpack ~0.4 s, peak memory ~250–300 MB.
+On a 48 MB, 1731-file corpus: pack ~2.2 s (half of it the portable deflate;
+`--fast` or `--level` trade it), unpack ~0.4 s, peak memory ~300–360 MB.
 
 ## Out of scope
 

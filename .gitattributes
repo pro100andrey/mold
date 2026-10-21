@@ -1,0 +1,3 @@
+# Golden archives are compared byte for byte on every platform; a checkout
+# must never touch them.
+*.mold binary

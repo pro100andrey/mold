@@ -101,10 +101,54 @@ extra_substitutions:
       expect((await mold(pack(['--check', '--dry-run']))).$1, 64);
     });
 
-    test('a different --level is stale, not equal', () async {
-      expect((await mold(pack([]))).$1, 0);
+    test('compression does not make it stale; content does', () async {
+      // Written by another compressor — the VM's zlib, another level — as
+      // another OS or SDK would. The content is the same, so it is current.
+      expect((await mold(pack(['--fast', '--level', '9']))).$1, 0);
+      final other = p.join(tmp.path, 'default.dart');
+      expect(
+        (await mold(['pack', project.path, '-f', 'bytes', '-o', other])).$1,
+        0,
+      );
+      // Otherwise this would pass under a byte comparison too.
+      expect(
+        File(embed).readAsBytesSync(),
+        isNot(File(other).readAsBytesSync()),
+      );
 
-      expect((await mold(pack(['--check', '--level', '0']))).$1, 1);
+      expect((await mold(pack(['--check']))).$1, 0);
+      expect((await mold(pack(['--check', '--level', '0']))).$1, 0);
+    });
+
+    test('names what changed', () async {
+      expect((await mold(pack([]))).$1, 0);
+      write(project, 'lib/super_server.dart', '// changed\n');
+      write(project, 'lib/extra.dart', '// new\n');
+
+      final (code, _, err) = await mold(pack(['--check']));
+
+      expect(code, 1);
+      expect(err, contains('1 changed (lib/super_server.dart)'));
+      expect(err, contains('1 added (lib/extra.dart)'));
+    });
+
+    test('a different declaration name is stale', () async {
+      expect((await mold(pack(['-n', 'other']))).$1, 0);
+
+      final (code, _, err) = await mold(pack(['--check']));
+
+      expect(code, 1);
+      expect(err, contains('the source around the archive differs'));
+    });
+
+    test('a tar.gz archive is checked by content too', () async {
+      final out = p.join(tmp.path, 'committed.mold');
+      expect(
+        (await mold(['pack', project.path, '-o', out, '--fast'])).$1,
+        0,
+      );
+
+      expect((await mold(['pack', project.path, '-o', out, '--check'])).$1, 0);
     });
 
     test('a bad --level is a usage error', () async {
