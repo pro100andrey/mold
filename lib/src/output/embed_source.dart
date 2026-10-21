@@ -7,12 +7,36 @@ import '../unbundler/case_converter.dart';
 /// These are auto-generated asset blobs (a `const` list / base64 string) with
 /// no structure to model, so they are assembled as plain string templates
 /// rather than with a code-builder library.
+///
+/// The output is meant to be committed into someone else's package, so it has
+/// to survive that package's tooling unchanged:
+///
+/// - **Lints.** `// ignore_for_file: type=lint` is the standard header of
+///   generated code. Lint sets disagree about these very declarations —
+///   `omit_obvious_property_types` wants the type gone, `always_specify_types`
+///   wants it kept — so no spelling satisfies every consumer, and guessing one
+///   just moves the warning. Errors are still reported.
+/// - **`dart format`.** Formatting the file changes nothing, in both the tall
+///   style (language 3.7+) and the short one before it. The byte list keeps its
+///   packed rows because it opens with a comment — both styles preserve a
+///   collection's line breaks once it holds one — and a row is 15 bytes, which
+///   stays within 80 columns at three digits each. The base64 declaration is
+///   split after `=` exactly when the formatter would split it.
 class EmbedSource {
   const EmbedSource();
 
   static const _header =
       '// AUTO-GENERATED — DO NOT EDIT.\n'
-      '// Produced by `mold pack`.\n';
+      '// Produced by `mold pack`.\n'
+      '\n'
+      '// ignore_for_file: type=lint\n';
+
+  /// Bytes per row of the `bytes` source: `255, ` × 15 plus the indent is 76
+  /// columns; 16 is 81, which the formatter rewraps.
+  static const _bytesPerRow = 15;
+
+  /// The formatter's page width.
+  static const _pageWidth = 80;
 
   /// The `const` identifier for a template named [manifestName]
   /// (e.g. `super_server` → `kSuperServerTemplate`).
@@ -25,24 +49,24 @@ class EmbedSource {
       ..write(_header)
       ..writeln()
       ..writeln('const List<int> ${constName(name)} = <int>[')
-      ..write('  ');
-    for (var i = 0; i < archive.length; i++) {
-      // Wrap for readability without exceeding line-length lints.
-      buffer
-        ..write('${archive[i]},')
-        ..write((i + 1) % 16 == 0 ? '\n  ' : ' ');
+      ..writeln('  // ${archive.length} bytes: a gzipped tar archive.');
+    for (var i = 0; i < archive.length; i += _bytesPerRow) {
+      final row = archive.skip(i).take(_bytesPerRow);
+      buffer.writeln('  ${row.join(', ')},');
     }
 
-    return (buffer
-          ..writeln()
-          ..writeln('];'))
-        .toString();
+    return (buffer..writeln('];')).toString();
   }
 
   /// A Dart source declaring a base64 `const String kXxxTemplateBase64`.
   String base64Source({required List<int> archive, required String name}) {
-    final encoded = base64.encode(archive);
-    return '$_header\n'
-        "const String ${constName(name)}Base64 =\n    '$encoded';\n";
+    final declaration = 'const String ${constName(name)}Base64 =';
+    final literal = "'${base64.encode(archive)}';";
+    final oneLine = '$declaration $literal';
+    final body = oneLine.length <= _pageWidth
+        ? oneLine
+        : '$declaration\n    $literal';
+
+    return '$_header\n$body\n';
   }
 }
