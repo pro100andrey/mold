@@ -306,6 +306,13 @@ class UnpackCommand extends Command<int> {
         help: 'Never prompt; use --var values and manifest defaults only.',
       )
       ..addFlag(
+        'force',
+        negatable: false,
+        help:
+            "Unpack into a non-empty target: write the template's files over "
+            'the same paths, leave every other file as it is.',
+      )
+      ..addFlag(
         'dry-run',
         negatable: false,
         help: 'Show what would be written, without writing it.',
@@ -349,6 +356,7 @@ class UnpackCommand extends Command<int> {
         prompter: VariablePrompter(_err, stdin.readLineSync),
       );
 
+      final overwrite = results['force'] as bool;
       final showDiff = results['diff'] as bool;
       // --diff implies --dry-run: there is no such thing as diffing a write
       // that already happened, so the combination cannot be invalid.
@@ -368,6 +376,7 @@ class UnpackCommand extends Command<int> {
             onWarning: (message) => _err.writeln('Warning: $message'),
             // A summary needs counts, not content.
             withContent: showDiff,
+            overwrite: overwrite,
           ),
           targetDir,
           showDiff: showDiff,
@@ -382,6 +391,7 @@ class UnpackCommand extends Command<int> {
         vars: vars,
         resolver: resolver,
         onWarning: (message) => _err.writeln('Warning: $message'),
+        overwrite: overwrite,
       );
       _err.writeln('Unpacked into $targetDir.');
       return 0;
@@ -403,6 +413,11 @@ class UnpackCommand extends Command<int> {
 ///
 /// Files nothing happens to are counted but not listed — a template is
 /// mostly unchanged files, and listing them buries the ones that matter.
+///
+/// Into an occupied target (`--force`), it also says which files would be
+/// created and which overwritten, and the diff of an overwritten file is
+/// against the file already there — that is the change the write makes.
+/// Overwrites that change nothing are counted, not listed.
 void _printPlan(
   StringSink err,
   UnpackPlan plan,
@@ -411,6 +426,8 @@ void _printPlan(
 }) {
   final renamed = plan.renamed.toList();
   final rewritten = plan.rewritten.toList();
+  final overwritten = plan.overwritten.toList();
+  final replacing = overwritten.where((f) => !f.identicalToExisting).toList();
 
   if (targetDir != null) {
     err.writeln('Dry run — nothing written to $targetDir.');
@@ -420,6 +437,13 @@ void _printPlan(
     '${rewritten.length} rewritten (${plan.totalReplacements} '
     'replacements), ${plan.untouched.length} unchanged.',
   );
+  if (overwritten.isNotEmpty) {
+    final identical = overwritten.length - replacing.length;
+    err.writeln(
+      '  Target is not empty: ${plan.created.length} to create, '
+      '${overwritten.length} to overwrite ($identical identical).',
+    );
+  }
 
   if (renamed.isNotEmpty) {
     err.writeln('\nRenamed:');
@@ -437,27 +461,60 @@ void _printPlan(
     }
   }
 
+  if (overwritten.isNotEmpty) {
+    final created = plan.created.toList();
+    if (created.isNotEmpty) {
+      err.writeln('\nCreated:');
+      for (final f in created) {
+        err.writeln('  ${f.to}');
+      }
+    }
+    if (replacing.isNotEmpty) {
+      err.writeln('\nOverwritten:');
+      for (final f in replacing) {
+        err.writeln('  ${f.to}');
+      }
+    }
+  }
+
   if (!showDiff) {
-    if (rewritten.isNotEmpty) {
+    if (rewritten.isNotEmpty || replacing.isNotEmpty) {
       err.writeln('\nRe-run with --diff to see the content changes.');
     }
     return;
   }
 
   const differ = UnifiedDiff();
-  for (final f in rewritten) {
-    final before = f.before;
-    final after = f.after;
-    if (before == null || after == null) {
-      continue;
+  for (final f in plan.files) {
+    final String rendered;
+    if (f.overwrites) {
+      if (f.identicalToExisting) {
+        continue;
+      }
+      final existing = f.existing;
+      final after = f.after;
+      rendered = existing == null || after == null
+          ? 'Binary file ${f.to} differs from the one in the target.\n'
+          : differ.render(
+              before: existing,
+              after: after,
+              fromLabel: '${f.to} (in target)',
+              toLabel: f.to,
+            );
+    } else {
+      final before = f.before;
+      final after = f.after;
+      if (f.replacements == 0 || before == null || after == null) {
+        continue;
+      }
+      rendered = differ.render(
+        before: before,
+        after: after,
+        fromLabel: f.from,
+        toLabel: f.to,
+      );
     }
 
-    final rendered = differ.render(
-      before: before,
-      after: after,
-      fromLabel: f.from,
-      toLabel: f.to,
-    );
     if (rendered.isNotEmpty) {
       err
         ..writeln()

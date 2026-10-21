@@ -7,6 +7,9 @@ class PlannedFile {
     required this.replacements,
     this.before,
     this.after,
+    this.overwrites = false,
+    this.identicalToExisting = false,
+    this.existing,
   });
 
   /// The entry's path inside the archive, before renaming.
@@ -27,6 +30,18 @@ class PlannedFile {
 
   /// The decoded content after substitution; null when [verbatim].
   final String? after;
+
+  /// Whether a file is already at [to] in the target, so writing this one
+  /// replaces it. Only an overwrite unpack can plan one.
+  final bool overwrites;
+
+  /// Whether the file already at [to] holds exactly the bytes this one would
+  /// write — an overwrite that changes nothing. False when nothing is there.
+  final bool identicalToExisting;
+
+  /// The decoded text of the file already at [to]; null when nothing is
+  /// there, it is not valid UTF-8, or the plan was built without content.
+  final String? existing;
 
   /// Whether the path itself changes.
   bool get renamed => from != to;
@@ -51,6 +66,12 @@ class UnpackPlan {
 
   /// Files whose content changes.
   Iterable<PlannedFile> get rewritten => files.where((f) => f.replacements > 0);
+
+  /// Files whose path is free in the target.
+  Iterable<PlannedFile> get created => files.where((f) => !f.overwrites);
+
+  /// Files that replace one already in the target.
+  Iterable<PlannedFile> get overwritten => files.where((f) => f.overwrites);
 
   /// Files nothing happens to.
   Iterable<PlannedFile> get untouched => files.where((f) => !f.changed);

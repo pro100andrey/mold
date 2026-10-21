@@ -54,6 +54,19 @@ class Unbundler implements UnbundlerBase {
   ///
   /// [onWarning] receives non-fatal problems that would otherwise be silent,
   /// such as failing to restore an executable bit.
+  ///
+  /// With [overwrite], [targetDir] may already hold files: each file the
+  /// template has is written over the file at the same path, and every other
+  /// file is left as it is — the way a tool regenerates a project in place.
+  /// Without it, a non-empty target is `TARGET_OCCUPIED`. Either way a target
+  /// that is a file is refused, and so is a template file that would land on
+  /// a directory, under a file, or through a symlink (`TARGET_PATH_CONFLICT`),
+  /// before anything is written.
+  ///
+  /// A failed unpack is undone, best-effort: files it created are removed,
+  /// files it overwrote get their previous content back, and directories it
+  /// created are removed once empty. Anything it could not undo is named
+  /// through [onWarning] before the error is rethrown.
   @override
   Future<void> unbundle({
     required List<int> bytes,
@@ -61,6 +74,7 @@ class Unbundler implements UnbundlerBase {
     Map<String, String> vars = const {},
     VariableResolver? resolver,
     void Function(String message)? onWarning,
+    bool overwrite = false,
   }) {
     final (archive, manifest, resolved) = _prepare(
       bytes,
@@ -68,6 +82,7 @@ class Unbundler implements UnbundlerBase {
       vars,
       resolver,
       onWarning,
+      overwrite: overwrite,
     );
 
     // Re-checked immediately before writing. Resolving variables may block on
@@ -79,9 +94,10 @@ class Unbundler implements UnbundlerBase {
     // consuming a ValidationResult two different ways in one method is how the
     // dropped-warning bug got in, and the next validator to grow one would
     // inherit it here.
-    _report(const TargetValidator().validate(targetDir), onWarning);
+    final target = TargetValidator(overwrite: overwrite);
+    _report(target.validate(targetDir), onWarning);
 
-    _write(archive, manifest, targetDir, resolved, onWarning);
+    _write(archive, manifest, targetDir, resolved, onWarning, target: target);
 
     return .value();
   }
@@ -94,12 +110,14 @@ class Unbundler implements UnbundlerBase {
     Map<String, String> vars = const {},
     VariableResolver? resolver,
     void Function(String message)? onWarning,
+    bool overwrite = false,
   }) => unbundle(
     bytes: source,
     targetDir: targetDir,
     vars: vars,
     resolver: resolver,
     onWarning: onWarning,
+    overwrite: overwrite,
   );
 
   /// Reads the archive at the file [source] and unpacks it into [targetDir].
@@ -109,6 +127,7 @@ class Unbundler implements UnbundlerBase {
     Map<String, String> vars = const {},
     VariableResolver? resolver,
     void Function(String message)? onWarning,
+    bool overwrite = false,
   }) {
     final file = File(source);
     if (!file.existsSync()) {
@@ -121,6 +140,7 @@ class Unbundler implements UnbundlerBase {
       vars: vars,
       resolver: resolver,
       onWarning: onWarning,
+      overwrite: overwrite,
     );
   }
 
@@ -137,8 +157,9 @@ class Unbundler implements UnbundlerBase {
     String? targetDir,
     Map<String, String> vars,
     VariableResolver? resolver,
-    void Function(String message)? onWarning,
-  ) {
+    void Function(String message)? onWarning, {
+    required bool overwrite,
+  }) {
     void report(ValidationResult result) => _report(result, onWarning);
 
     report(const ArchiveValidator().validate(bytes));
@@ -149,7 +170,7 @@ class Unbundler implements UnbundlerBase {
     // substitutions of a template that has not been distributed yet. Every
     // other phase still runs.
     if (targetDir != null) {
-      report(const TargetValidator().validate(targetDir));
+      report(TargetValidator(overwrite: overwrite).validate(targetDir));
     }
 
     final resolved = (resolver ?? const VariableResolver()).resolve(
@@ -177,22 +198,43 @@ class Unbundler implements UnbundlerBase {
   /// asymmetry — each reaches exactly one side. Binary files (by extension,
   /// including `binary_extensions`) and `no_substitute` matches are copied
   /// byte-for-byte — though their path is still renamed.
+  ///
+  /// Writes in place, keeping what it needs to undo them: the files it
+  /// created, the directories it created, and the previous bytes of each file
+  /// it overwrote. Staging into a scratch directory and moving the result in
+  /// was the alternative, and it buys less than it seems — moving a tree of
+  /// files into an occupied directory is one rename per file, so it is no
+  /// more atomic than writing them, and a scratch directory beside the target
+  /// can sit on another filesystem, where a rename is a copy. The predictable
+  /// failure — a path conflict — is caught before the first write by
+  /// [TargetValidator.validateDestinations]; what is left (a read-only file,
+  /// a full disk, the tree changing underneath) this undoes.
+  ///
+  /// Overwritten files keep their mode: the content is replaced in place, and
+  /// the executable bit is added where the template has it, never removed.
   void _write(
     BundleArchive archive,
     Manifest manifest,
     String targetDir,
     Map<String, String> resolved,
-    void Function(String message)? onWarning,
-  ) {
+    void Function(String message)? onWarning, {
+    required TargetValidator target,
+  }) {
     final rules = _Rules(manifest, resolved);
     final renames = rules.renameAll(archive.files.keys);
+    if (target.overwrite) {
+      _report(
+        target.validateDestinations(targetDir, renames.values),
+        onWarning,
+      );
+    }
 
     // Whether the destination is ours to remove if this goes wrong. An unpack
-    // into an existing empty directory must not delete that directory; one
-    // that created it must not leave the debris behind.
+    // into an existing directory must not delete that directory; one that
+    // created it must not leave the debris behind.
     final preexisting = Directory(targetDir).existsSync();
-    final target = Directory(targetDir)..createSync(recursive: true);
-    final written = <String>[];
+    final root = Directory(targetDir)..createSync(recursive: true);
+    final undo = _Undo(root.path, preexisting: preexisting);
     final restoreExecutable = <String>[];
     try {
       for (final entry in archive.files.entries) {
@@ -200,8 +242,13 @@ class Unbundler implements UnbundlerBase {
         // Absolute, so `chmod` cannot mistake a path for an option: GNU getopt
         // permutes arguments, so a target directory named `-out` would make
         // `chmod +x -out/x.sh` parse as flags and fail for the whole batch.
-        final outPath = p.absolute(p.join(target.path, outRel));
-        final out = File(outPath)..parent.createSync(recursive: true);
+        final outPath = p.absolute(p.join(root.path, outRel));
+        final out = File(outPath);
+        // Recorded before the write, so a write that fails halfway — a
+        // truncated file — is undone too.
+        undo
+          ..createParents(out.parent)
+          ..recordWrite(out);
 
         final decoded = rules.decodeForSubstitution(entry.key, entry.value);
         if (decoded == null) {
@@ -211,7 +258,6 @@ class Unbundler implements UnbundlerBase {
             rules.encodeSubstituted(entry.value, rules.substitute(decoded)),
           );
         }
-        written.add(outPath);
 
         if (archive.executable.contains(entry.key)) {
           restoreExecutable.add(outPath);
@@ -220,8 +266,15 @@ class Unbundler implements UnbundlerBase {
     } on Object {
       // A half-written project is worse than none: it is not runnable, and it
       // makes the obvious retry fail with TARGET_OCCUPIED, so the user has to
-      // work out what to delete before they can try again.
-      _rollback(targetDir, written, preexisting: preexisting);
+      // work out what to delete before they can try again. Into an occupied
+      // target it is worse still: a mix of their files and the template's.
+      final leftover = undo.run();
+      if (leftover.isNotEmpty) {
+        onWarning?.call(
+          'The unpack failed and could not undo all of it; check these '
+          'paths: ${leftover.join(', ')}',
+        );
+      }
       rethrow;
     }
     _makeExecutable(restoreExecutable, onWarning);
@@ -240,34 +293,6 @@ class Unbundler implements UnbundlerBase {
       onWarning?.call(warning.toString());
     }
     result.throwIfInvalid();
-  }
-
-  /// Removes what a failed [_write] managed to create, best-effort.
-  ///
-  /// Only the files it wrote, and only the destination directory when this
-  /// unpack is what created it — deleting a directory the user already had
-  /// would turn a failed unpack into data loss. Failures here are swallowed:
-  /// the write error that triggered the rollback is the one worth reporting,
-  /// and masking it with a cleanup error would hide the cause.
-  static void _rollback(
-    String targetDir,
-    List<String> written, {
-    required bool preexisting,
-  }) {
-    try {
-      if (!preexisting) {
-        Directory(targetDir).deleteSync(recursive: true);
-        return;
-      }
-      for (final path in written) {
-        final file = File(path);
-        if (file.existsSync()) {
-          file.deleteSync();
-        }
-      }
-    } on FileSystemException {
-      // Best-effort.
-    }
   }
 
   /// Restores the owner-executable bit on [paths].
@@ -316,6 +341,12 @@ class Unbundler implements UnbundlerBase {
   ///
   /// [onWarning] receives the same warnings a real unpack would report, so a
   /// preview is not quieter than the thing it previews.
+  ///
+  /// [overwrite] is [unbundle]'s: with it an occupied [targetDir] is planned
+  /// rather than refused, and each file says whether it would replace one
+  /// already there ([PlannedFile.overwrites]), whether that changes anything
+  /// ([PlannedFile.identicalToExisting]), and — with [withContent] — what the
+  /// file there holds now ([PlannedFile.existing]).
   UnpackPlan plan({
     required List<int> bytes,
     String? targetDir,
@@ -323,6 +354,7 @@ class Unbundler implements UnbundlerBase {
     VariableResolver? resolver,
     void Function(String message)? onWarning,
     bool withContent = true,
+    bool overwrite = false,
   }) {
     final (archive, manifest, resolved) = _prepare(
       bytes,
@@ -330,9 +362,21 @@ class Unbundler implements UnbundlerBase {
       vars,
       resolver,
       onWarning,
+      overwrite: overwrite,
     );
     final rules = _Rules(manifest, resolved);
     final renames = rules.renameAll(archive.files.keys);
+    // Without overwrite the target was just validated empty, so nothing in it
+    // can be replaced and there is nothing to look at.
+    final inspect = overwrite ? targetDir : null;
+    if (inspect != null) {
+      _report(
+        const TargetValidator(
+          overwrite: true,
+        ).validateDestinations(inspect, renames.values),
+        onWarning,
+      );
+    }
 
     return UnpackPlan([
       for (final entry in archive.files.entries)
@@ -342,6 +386,7 @@ class Unbundler implements UnbundlerBase {
           renames[entry.key]!,
           entry.value,
           withContent: withContent,
+          inspect: inspect,
         ),
     ]);
   }
@@ -352,28 +397,144 @@ class Unbundler implements UnbundlerBase {
     String to,
     List<int> bytes, {
     required bool withContent,
+    String? inspect,
   }) {
+    final existing = inspect == null ? null : File(p.join(inspect, to));
     final before = rules.decodeForSubstitution(key, bytes);
-    if (before == null) {
-      return PlannedFile(
-        from: key,
-        to: to,
-        verbatim: true,
-        replacements: 0,
-      );
-    }
+    final after = before == null ? null : rules.substitute(before);
+    final onDisk = existing != null && existing.existsSync()
+        ? existing.readAsBytesSync()
+        : null;
 
     return PlannedFile(
       from: key,
       to: to,
-      verbatim: false,
-      replacements: rules.countSubstitutions(before),
+      verbatim: before == null,
+      replacements: before == null ? 0 : rules.countSubstitutions(before),
       // Only materialized when a caller will render it. A summary needs the
       // count alone, and holding both sides of every text file to print one
       // is two extra copies of the whole corpus.
       before: withContent ? before : null,
-      after: withContent ? rules.substitute(before) : null,
+      after: withContent ? after : null,
+      overwrites: onDisk != null,
+      identicalToExisting:
+          onDisk != null &&
+          _sameBytes(
+            onDisk,
+            after == null ? bytes : rules.encodeSubstituted(bytes, after),
+          ),
+      existing: withContent && onDisk != null ? _tryDecode(onDisk) : null,
     );
+  }
+
+  static bool _sameBytes(List<int> a, List<int> b) {
+    if (a.length != b.length) {
+      return false;
+    }
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  static String? _tryDecode(List<int> bytes) {
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
+/// What a failed `Unbundler._write` has to put back, recorded as it goes.
+///
+/// Best-effort by design: a failure while undoing is collected rather than
+/// thrown, because the write error that triggered the undo is the one worth
+/// reporting, and masking it with a cleanup error would hide the cause.
+class _Undo {
+  _Undo(this._root, {required this._preexisting});
+
+  final String _root;
+
+  /// Whether [_root] existed before the unpack — deleting a directory the
+  /// user already had would turn a failed unpack into data loss.
+  final bool _preexisting;
+
+  /// Files that did not exist before.
+  final List<File> _created = [];
+
+  /// Files that did, with the bytes they held.
+  final Map<String, List<int>> _replaced = {};
+
+  /// Directories that did not exist before, outermost first.
+  final List<Directory> _dirs = [];
+
+  /// Creates [dir] and its missing parents, remembering which were missing.
+  void createParents(Directory dir) {
+    final missing = <Directory>[];
+    for (
+      var d = dir;
+      !d.existsSync() && d.path != d.parent.path;
+      d = d.parent
+    ) {
+      missing.add(d);
+    }
+    dir.createSync(recursive: true);
+    _dirs.addAll(missing.reversed);
+  }
+
+  /// Records [file] as about to be written: as created when it is not there,
+  /// or with its current bytes when it is.
+  ///
+  /// The bytes are held in memory. They are at most one file per archive
+  /// entry, and the archive itself is already held in memory whole.
+  void recordWrite(File file) {
+    if (file.existsSync()) {
+      _replaced.putIfAbsent(file.path, file.readAsBytesSync);
+    } else {
+      _created.add(file);
+    }
+  }
+
+  /// Undoes everything recorded; returns the paths it could not restore.
+  List<String> run() {
+    if (!_preexisting) {
+      // Everything under it is ours, so there is nothing to restore.
+      return _attempt(_root, () => Directory(_root).deleteSync(recursive: true))
+          ? const []
+          : [_root];
+    }
+
+    final failed = <String>[
+      for (final file in _created)
+        if (!_attempt(file.path, () {
+          if (file.existsSync()) {
+            file.deleteSync();
+          }
+        }))
+          file.path,
+      for (final MapEntry(key: path, value: bytes) in _replaced.entries)
+        if (!_attempt(path, () => File(path).writeAsBytesSync(bytes))) path,
+    ];
+    // Innermost first, and only while empty: a directory the unpack created
+    // can since have gained a file of someone else's.
+    for (final dir in _dirs.reversed) {
+      _attempt(dir.path, dir.deleteSync);
+    }
+
+    return failed;
+  }
+
+  static bool _attempt(String path, void Function() action) {
+    try {
+      action();
+      return true;
+    } on FileSystemException {
+      return false;
+    }
   }
 }
 
