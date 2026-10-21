@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.1.4
+
+- **`mold unpack --force`** unpacks into a directory that already holds files —
+  for a tool that regenerates a project in place, which until now had to unpack
+  into a scratch directory and copy the result over itself. Each file the
+  template has is written over the file at the same path; every other file is
+  left as it is. Without the flag nothing changes: a non-empty target is still
+  `TARGET_OCCUPIED`, and a target that is a file is refused either way.
+
+  In the library it is `overwrite: true` on `unbundle`, `unbundleBytes`,
+  `unbundleFile` and `plan`, and on `TargetValidator`.
+
+  - A template file that would land on a directory, under a file, or through a
+    symlink is a new error, `TARGET_PATH_CONFLICT`, reported before anything is
+    written. The symlink case keeps every write inside the target, the same
+    guarantee the archive validator makes about entry paths.
+  - `--force --dry-run` lists which files would be created and which
+    overwritten, counting overwrites that change nothing rather than listing
+    them. `--force --diff` diffs an overwritten file against the one already
+    there. `PlannedFile` gains `overwrites`, `identicalToExisting` and
+    `existing`; `UnpackPlan` gains `created` and `overwritten`.
+  - A write that fails partway is undone: created files are removed,
+    overwritten files get their previous content back, and directories the
+    unpack created are removed once empty. Anything that cannot be undone is
+    named through `onWarning`. Writes go straight into the target rather than
+    through a scratch directory — moving a tree into an occupied directory is
+    one rename per file, so staging would be no more atomic.
+  - The writability probe uses a unique name, so in a non-empty target it
+    cannot overwrite, then delete, a file of the user's that happens to share
+    its name.
+
+- **Generated embed sources pass the consumer's tooling.** `pack --format
+  bytes|base64` output carries `// ignore_for_file: type=lint`, the standard
+  header of generated code. Lint sets disagree about its declarations —
+  `omit_obvious_property_types` flags the explicit type, `always_specify_types`
+  demands it — so the file had to be excluded from analysis. Errors are still
+  reported.
+
+  It is also `dart format`-stable now, in both the tall and the pre-3.7 style.
+  It was not: the byte rows ran to 81 columns and ended in a trailing space,
+  and the formatter exploded the list to one byte per line. Rows are 15 bytes
+  and open with a comment, which both styles keep as written. Regenerating an
+  embedded template therefore changes the file once.
+
+- **No false `PROJECT_PARTIAL_OVERLAP` on separator-joined names.** A match
+  counted as "inside a longer word" when any `\w` touched it, and `_` is one,
+  so for `replaces: app_template` the project's own `app_template_test` and
+  `app_template_g` counted as over-reach — warning on every pack, or past 30%
+  refusing it — although rewriting them to `my_app_test` is the point. What
+  continues a word now depends on the casing that matched: for snake, kebab and
+  SCREAMING a letter or digit, for Pascal a following lowercase letter. So
+  `AppTemplateTest` and `MyAppTemplate` are whole words too, while `my_app` in
+  `my_appendix`, `app` in `application` and `MyApp` in `MyApplication` are
+  still caught. Thresholds and messages are unchanged.
+
+  Ratios drop for most tokens. On a fresh `flutter create` project: `app` 83%
+  → 65%, `test` 95% → 73%, `runner` 26% → under 5%, `bin` 75% unchanged.
+
+- Requires Dart 3.13.5; dependencies bumped.
+
 ## 0.1.3
 
 - **Archives are reproducible.** Every tar entry used to carry the wall-clock

@@ -64,7 +64,7 @@ import 'package:mold/mold.dart';
 
 ### Requirements
 
-Dart SDK **3.12.2 or newer**. No other runtime dependencies — `mold` shells out
+Dart SDK **3.13.5 or newer**. No other runtime dependencies — `mold` shells out
 to `chmod` on POSIX to restore executable bits, and does nothing at all if that
 is unavailable.
 
@@ -123,9 +123,35 @@ mold unpack <source> [options]
   --target,   -t   Destination dir            (default: ./<source-stem>)
   --var,      -v   key=value                  (repeatable)
   --no-prompt      Use only --var + manifest defaults; never prompt
+  --force          Unpack into a non-empty target (see below)
   --dry-run        Show what would be written, without writing it
   --diff           Also show a unified diff (implies --dry-run)
 ```
+
+### Unpacking into a non-empty directory
+
+By default the target must not exist, or be an empty directory; anything else
+is `TARGET_OCCUPIED`. `--force` writes into a directory that already holds
+files — the way a tool regenerates a project in place:
+
+- each file the template has is written over the file at the same path;
+- every file the template does not have is left as it is;
+- a target that is a file, not a directory, is still refused;
+- a template file that would land on a directory, under a file, or through a
+  symlink is `TARGET_PATH_CONFLICT`, reported before anything is written.
+
+`--force` is not a merge: an overwritten file holds the template's version,
+whatever was edited in it. Preview first — `--force --dry-run` lists what
+would be created and what overwritten, and `--force --diff` diffs each
+overwritten file against the one already there.
+
+If a write still fails partway (a read-only file, a full disk), the
+unpack is undone: created files are removed, overwritten files get their
+previous content back, and directories it created are removed once empty.
+Anything it could not undo is named in a warning. Writes go straight into the
+target rather than through a scratch directory: moving a tree into an occupied
+directory is one rename per file, so it would be no more atomic, and a scratch
+directory can sit on another filesystem, where a rename is a copy.
 
 `mold help pack` / `mold help unpack` for the full option list. During
 development: `dart run mold:mold pack ./super_server`.
@@ -350,14 +376,24 @@ identifier.
 | ≥ 5%       | warning — `PROJECT_PARTIAL_OVERLAP`     |
 | below      | silent                                  |
 
-Measured on real corpora: `bin` 95%, `app` 84%, `runner` 25%, a self-named
-project ~14%, `test` 4%.
+A match is collateral when the characters around it continue the word *in the
+casing that matched*. For the snake, kebab and SCREAMING forms a letter or
+digit continues it, and `_`, `-` and anything else end it — so
+`app_template_test` is a whole-word match for `replaces: app_template`, and
+renaming it to `my_app_test` is the point. For the Pascal form only a following
+lowercase letter continues it: `AppTemplateTest` and `MyAppTemplate` are whole
+words, `AppTemplateer` is not. `my_app` in `my_appendix`, `app` in
+`application` and `MyApp` in `MyApplication` are all still collateral.
+
+Measured on a fresh `flutter create` project (Flutter 3.47): `bin` 75%, `test`
+73%, `app` 65%; `runner` and the project's own name under 5%.
 
 ```text
-[PROJECT_TOKEN_TOO_GENERIC] Variable 'project_name': token 'app' matches 669
-times; 501 (75%) inside longer words: application (73), apple (36),
-AppIcon (30). Substituting it would rewrite those too — pick a more
-distinctive token, or replace these sites with explicit extra_substitutions.
+[PROJECT_TOKEN_TOO_GENERIC] Variable 'project_name': token 'app' matches 615
+times; 398 (65%) inside longer words: application (72),
+flutter_application_1 (40), apple (36). Substituting it would rewrite those
+too — pick a more distinctive token, or replace these sites with explicit
+extra_substitutions.
 ```
 
 When a token is too generic, the way forward is explicit `extra_substitutions`
@@ -395,6 +431,26 @@ The preview runs the same validation, resolution and substitution rules as a
 real unpack, so it cannot disagree with one; it is that computation minus the
 writes. The target is validated too, so a dry run also answers "is the
 destination usable".
+
+Into an occupied target (`--force`), the preview says what the write would do
+to the files already there:
+
+```text
+Dry run — nothing written to ./my_project.
+  4 files: 1 renamed, 3 rewritten (5 replacements), 1 unchanged.
+  Target is not empty: 1 to create, 3 to overwrite (2 identical).
+...
+Created:
+  lib/src/new_in_template.dart
+
+Overwritten:
+  pubspec.yaml
+```
+
+Overwrites that would change nothing are counted, not listed. With `--diff`,
+an overwritten file is diffed against the file already there (`--- pubspec.yaml
+(in target)`), since that is the change the write makes; a created file is
+diffed against the template, as without `--force`.
 
 `mold pack --dry-run` is a **preflight**: which files would be captured, how
 many each filter removed, and the token verdict.
@@ -460,12 +516,13 @@ stderr.
 | unpack | `ARCHIVE_MISSING_FILES`             | no `files/` tree                               |
 | unpack | `ARCHIVE_UNSAFE_PATH`               | an entry escapes the target directory          |
 | unpack | `TARGET_PARENT_NOT_FOUND`           | parent directory missing                       |
-| unpack | `TARGET_OCCUPIED`                   | destination exists and is not empty            |
+| unpack | `TARGET_OCCUPIED`                   | target is a file, or not empty (no `--force`)  |
 | unpack | `TARGET_NOT_WRITABLE`               | no write permission                            |
 | unpack | `VARIABLE_MISSING`                  | required variable has no value                 |
 | unpack | `VARIABLE_INVALID_FORMAT`           | value is not a well-formed name token          |
 | unpack | `VARIABLE_UNKNOWN`                  | `--var` names a variable the template lacks    |
 | unpack | `RENAME_COLLISION`                  | two entries would land on the same path        |
+| unpack | `TARGET_PATH_CONFLICT`              | `--force`: a path is blocked in the target     |
 
 ⚠ = warning; does not block.
 
@@ -477,6 +534,8 @@ Phase order — pack: `Manifest → Project`; unpack:
 `Archive → Manifest → Target → Variables → Rename`. The first failing phase aborts
 before the next runs. Target precedes variables so an interactive unpack does
 not make you answer every prompt before learning the destination is occupied.
+`TARGET_PATH_CONFLICT` is the one target check that runs after Rename: which
+paths conflict depends on where renaming puts each file.
 
 ### Exit codes
 
@@ -519,6 +578,18 @@ await const Unbundler().unbundleBytes(
 `onWarning` receives non-fatal problems that would otherwise be invisible — a
 skipped symlink, a token that will over-reach, a failed `chmod`.
 
+`overwrite: true` is the CLI's `--force`, on `unbundle`, `unbundleBytes`,
+`unbundleFile` and `plan`:
+
+```dart
+await const Unbundler().unbundleBytes(
+  source: archive,
+  targetDir: './my_project', // may already hold files
+  vars: {'project_name': 'my_project'},
+  overwrite: true,
+);
+```
+
 ### Previewing programmatically
 
 ```dart
@@ -535,7 +606,10 @@ print('${plan.totalReplacements} replacements in ${plan.files.length} files');
 ```
 
 Each `PlannedFile` carries `from`, `to`, `verbatim`, `replacements`, and — for
-text files — `before` and `after`, which `UnifiedDiff` renders.
+text files — `before` and `after`, which `UnifiedDiff` renders. With
+`overwrite: true` it also says whether it `overwrites` a file already in the
+target, whether that file is `identicalToExisting`, and the `existing` text;
+`plan.created` and `plan.overwritten` split the files by it.
 
 ### Prompting
 
@@ -564,6 +638,14 @@ variable.
 `AUTO-GENERATED — DO NOT EDIT` header) so a template can ship inside a compiled
 executable and scaffold offline.
 
+The file is meant to be committed into your package, so it is made to pass
+your tooling unchanged. It carries `// ignore_for_file: type=lint`, the standard
+header of generated code: lint sets disagree about its very declarations
+(`omit_obvious_property_types` against `always_specify_types`), so no spelling
+of them would satisfy every set, and errors are still reported. And
+`dart format` leaves it as it is, in both the tall and the pre-3.7 style — no
+need to exclude it from a format check.
+
 ```sh
 mold pack ./super_server -f bytes  -o lib/template.dart
 mold pack ./super_server -f base64 -o lib/template.dart
@@ -571,7 +653,16 @@ mold pack ./super_server -f base64 -o lib/template.dart
 
 ```dart
 // lib/template.dart (generated)
-const List<int> kSuperServerTemplate = <int>[31, 139, 8, 0, /* ... */];
+// AUTO-GENERATED — DO NOT EDIT.
+// Produced by `mold pack`.
+
+// ignore_for_file: type=lint
+
+const List<int> kSuperServerTemplate = <int>[
+  // 2741 bytes: a gzipped tar archive.
+  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 237, 189, 107, 115, 219,
+  // ...
+];
 ```
 
 ```dart
@@ -623,3 +714,5 @@ disk, and `pack` never mutates the source.
 - **Compression other than gzip**, encryption, or signing.
 - **Remote template registries** or fetching over the network.
 - **Updating an already-scaffolded project** when its template moves forward.
+  `--force` regenerates over it, but replaces rather than merges: edits in the
+  files the template has are overwritten.
