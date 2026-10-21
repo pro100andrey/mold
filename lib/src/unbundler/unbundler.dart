@@ -12,6 +12,7 @@ import '../manifest/manifest.dart';
 import '../manifest/manifest_validator.dart';
 import '../manifest/substitution_template.dart';
 import '../prompt/variable_resolver.dart';
+import '../util/bytes.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import 'case_converter.dart';
@@ -19,6 +20,7 @@ import 'rename_validator.dart';
 import 'substitutor.dart';
 import 'target_validator.dart';
 import 'unpack_plan.dart';
+import 'unpack_stamp.dart';
 import 'variables_validator.dart';
 
 /// Materializes a project from a template archive, applying manifest-driven
@@ -46,6 +48,12 @@ class Unbundler {
   /// A failed write that could not be fully undone.
   static const undoIncomplete = 'UNPACK_UNDO_INCOMPLETE';
 
+  /// Files the previous unpack wrote that the template no longer has.
+  static const staleFiles = 'UNPACK_STALE_FILES';
+
+  /// A `.mold.json` in the target that is not a readable stamp.
+  static const stampInvalid = 'UNPACK_STAMP_INVALID';
+
   /// Unpacks the archive [bytes] into [targetDir]: [plan], then [apply].
   ///
   /// [vars] holds explicit values; any variable absent from it is resolved by
@@ -59,6 +67,7 @@ class Unbundler {
   /// each template the subset it declares.
   ///
   /// With [overwrite], [targetDir] may already hold files — see [apply].
+  /// With [stamp], the unpack records itself in the target — see [plan].
   ///
   /// [onWarning] receives non-fatal problems that would otherwise be silent,
   /// such as a token that over-reaches or failing to restore an executable
@@ -69,6 +78,7 @@ class Unbundler {
     Map<String, String> vars = const {},
     VariableResolver? resolver,
     bool overwrite = false,
+    bool stamp = false,
     WarningSink? onWarning,
   }) async {
     final planned = plan(
@@ -77,6 +87,7 @@ class Unbundler {
       vars: vars,
       resolver: resolver,
       overwrite: overwrite,
+      stamp: stamp,
       withContent: false,
       onWarning: onWarning,
     );
@@ -92,6 +103,7 @@ class Unbundler {
     Map<String, String> vars = const {},
     VariableResolver? resolver,
     bool overwrite = false,
+    bool stamp = false,
     WarningSink? onWarning,
   }) async {
     await unbundle(
@@ -100,6 +112,7 @@ class Unbundler {
       vars: vars,
       resolver: resolver,
       overwrite: overwrite,
+      stamp: stamp,
       onWarning: onWarning,
     );
   }
@@ -138,6 +151,13 @@ class Unbundler {
   /// ([PlannedFile.identicalToExisting]), and — with [withContent] — what the
   /// file there holds now ([PlannedFile.existing]).
   ///
+  /// With [stamp], the plan also writes an [UnpackStamp] — `.mold.json`, at
+  /// the target's root — recording the template, the variable values and the
+  /// files written. A target that already holds a stamp gets an updated one
+  /// whether or not [stamp] is set, since a stamp that no longer describes
+  /// the files would be worse than none; and the files its previous stamp
+  /// lists that this template no longer has become [UnpackPlan.stale].
+  ///
   /// [withContent] keeps the decoded text of each file, before and after
   /// substitution, for rendering a diff. A plan meant only to be applied does
   /// not need it, and holding both sides of every text file is two extra
@@ -151,14 +171,11 @@ class Unbundler {
     Map<String, String> vars = const {},
     VariableResolver? resolver,
     bool overwrite = false,
+    bool stamp = false,
     bool withContent = true,
     WarningSink? onWarning,
   }) {
-    final inspected = const ArchiveValidator().inspect(bytes);
-    inspected.result.report(onWarning);
-    final archive = const ArchiveReader().fromTar(inspected.tar!);
-    final manifest = Manifest.fromYaml(archive.manifestYaml);
-    const ManifestValidator().validate(manifest).report(onWarning);
+    final (archive, manifest) = _open(bytes, onWarning);
     // A null target means "no destination in mind" — previewing the
     // substitutions of a template that has not been distributed yet. Every
     // other phase still runs.
@@ -181,38 +198,151 @@ class Unbundler {
         )
         .report(onWarning);
 
-    final rules = _Rules(manifest, resolved);
-    final renames = {
-      for (final key in archive.files.keys) key: rules.rename(key),
-    };
-    const RenameValidator().validate(renames).report(onWarning);
-
     // Without overwrite the target was just validated empty, so nothing in it
     // can be replaced and there is nothing to look at.
     final inspect = overwrite ? targetDir : null;
+    final previous = inspect == null ? null : _readStamp(inspect, onWarning);
+    final writeStamp = targetDir != null && (stamp || previous != null);
+
+    final rules = _Rules(manifest, resolved);
+    final renames = {
+      for (final key in archive.files.keys) key: rules.rename(key),
+      // In the mapping so a template file renamed onto the stamp's path is a
+      // collision like any other, not a file the stamp silently replaces.
+      if (writeStamp) _stampKey: UnpackStamp.fileName,
+    };
+    const RenameValidator().validate(renames).report(onWarning);
+
     if (inspect != null) {
       target.validateDestinations(inspect, renames.values).report(onWarning);
     }
+    File? existing(String to) =>
+        inspect == null ? null : File(p.join(inspect, to));
+
+    final files = [
+      for (final MapEntry(key: from, value: content) in archive.files.entries)
+        _planOne(
+          rules,
+          from,
+          renames[from]!,
+          content,
+          executable: archive.executable.contains(from),
+          withContent: withContent,
+          existing: existing(renames[from]!),
+        ),
+    ];
+    final written = {for (final f in files) f.to};
+    if (writeStamp) {
+      final record = UnpackStamp(
+        template: manifest.name,
+        version: manifest.version,
+        vars: resolved,
+        files: written.toList()..sort(),
+      );
+      files.add(
+        _planGenerated(
+          UnpackStamp.fileName,
+          utf8.encode(record.toJson()),
+          withContent: withContent,
+          existing: existing(UnpackStamp.fileName),
+        ),
+      );
+    }
 
     return UnpackPlan(
-      files: [
-        for (final MapEntry(key: from, value: content) in archive.files.entries)
-          _planOne(
-            rules,
-            from,
-            renames[from]!,
-            content,
-            executable: archive.executable.contains(from),
-            withContent: withContent,
-            existing: inspect == null
-                ? null
-                : File(p.join(inspect, renames[from])),
-          ),
-      ],
+      files: files,
       manifest: manifest,
       values: resolved,
       targetDir: targetDir,
       overwrite: overwrite,
+      stale: [
+        for (final path in previous?.files ?? const <String>[])
+          if (!written.contains(path) &&
+              File(p.join(inspect!, path)).existsSync())
+            path,
+      ],
+    );
+  }
+
+  /// The key the stamp takes in the rename mapping — not a legal archive
+  /// path, so no entry can share it.
+  static const _stampKey = '(mold stamp)';
+
+  /// The stamp already in [targetDir], when there is one.
+  ///
+  /// A `.mold.json` that is not a stamp is reported rather than ignored: it is
+  /// about to be overwritten if a stamp is written, and stale files cannot be
+  /// told without it.
+  static UnpackStamp? _readStamp(String targetDir, WarningSink? onWarning) {
+    final file = File(p.join(targetDir, UnpackStamp.fileName));
+    if (!file.existsSync()) {
+      return null;
+    }
+    final stamp = UnpackStamp.tryParse(file.readAsStringSync());
+    if (stamp == null) {
+      onWarning?.call(
+        ValidationError.warning(
+          stampInvalid,
+          '${file.path} is not a mold stamp, so files the template has '
+          'dropped cannot be told apart.',
+        ),
+      );
+    }
+
+    return stamp;
+  }
+
+  /// Validates the archive and its manifest, and opens both — the part of an
+  /// unpack that needs no variables and no target.
+  (BundleArchive, Manifest) _open(List<int> bytes, WarningSink? onWarning) {
+    final inspected = const ArchiveValidator().inspect(bytes);
+    inspected.result.report(onWarning);
+    final archive = const ArchiveReader().fromTar(inspected.tar!);
+    final manifest = Manifest.fromYaml(archive.manifestYaml);
+    const ManifestValidator().validate(manifest).report(onWarning);
+
+    return (archive, manifest);
+  }
+
+  /// Describes the template in archive [bytes] without unpacking it: its
+  /// manifest and its files, unrenamed.
+  ///
+  /// Runs the archive and manifest phases of an unpack, so an archive that
+  /// inspects cleanly fails an unpack only on variables or the target.
+  TemplateInfo inspect(List<int> bytes, {WarningSink? onWarning}) {
+    final (archive, manifest) = _open(bytes, onWarning);
+
+    return TemplateInfo(
+      manifest: manifest,
+      sizes: {
+        for (final MapEntry(:key, :value) in archive.files.entries)
+          key: value.length,
+      },
+      executable: archive.executable,
+    );
+  }
+
+  PlannedFile _planGenerated(
+    String path,
+    Uint8List bytes, {
+    required bool withContent,
+    required File? existing,
+  }) {
+    final onDisk = existing != null && existing.existsSync()
+        ? existing.readAsBytesSync()
+        : null;
+
+    return PlannedFile(
+      from: path,
+      to: path,
+      verbatim: false,
+      replacements: 0,
+      bytes: bytes,
+      generated: true,
+      after: withContent ? utf8.decode(bytes) : null,
+      overwrites: onDisk != null,
+      identicalToExisting: onDisk != null && sameBytes(onDisk, bytes),
+      existing: withContent && onDisk != null ? _tryDecode(onDisk) : null,
     );
   }
 
@@ -253,7 +383,7 @@ class Unbundler {
       before: withContent ? before : null,
       after: withContent ? after : null,
       overwrites: onDisk != null,
-      identicalToExisting: onDisk != null && _sameBytes(onDisk, bytes),
+      identicalToExisting: onDisk != null && sameBytes(onDisk, bytes),
       existing: withContent && onDisk != null ? _tryDecode(onDisk) : null,
     );
   }
@@ -346,6 +476,17 @@ class Unbundler {
       rethrow;
     }
     _makeExecutable(restoreExecutable, onWarning);
+
+    if (plan.stale.isNotEmpty) {
+      onWarning?.call(
+        ValidationError.warning(
+          staleFiles,
+          '${plan.stale.length} file(s) from the previous unpack are no '
+          'longer in the template and were left in place: '
+          '${plan.stale.join(', ')}',
+        ),
+      );
+    }
   }
 
   /// Restores the owner-executable bit on [paths].
@@ -382,19 +523,6 @@ class Unbundler {
         warn?.call(ValidationError.warning(chmodFailed, failure));
       }
     }
-  }
-
-  static bool _sameBytes(List<int> a, List<int> b) {
-    if (a.length != b.length) {
-      return false;
-    }
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   static String? _tryDecode(List<int> bytes) {
@@ -635,4 +763,29 @@ class _Rules {
 
     return table;
   }
+}
+
+/// What `Unbundler.inspect` reports about a template archive.
+class TemplateInfo {
+  const TemplateInfo({
+    required this.manifest,
+    required this.sizes,
+    this.executable = const {},
+  });
+
+  /// The embedded manifest.
+  final Manifest manifest;
+
+  /// Each file's path inside the archive — before renaming — and its size in
+  /// bytes, in archive order.
+  final Map<String, int> sizes;
+
+  /// The paths recorded as owner-executable.
+  final Set<String> executable;
+
+  /// The paths, in archive order.
+  Iterable<String> get files => sizes.keys;
+
+  /// Total bytes across every file.
+  int get totalBytes => sizes.values.fold(0, (sum, n) => sum + n);
 }

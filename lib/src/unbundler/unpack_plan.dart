@@ -16,9 +16,11 @@ class PlannedFile {
     this.overwrites = false,
     this.identicalToExisting = false,
     this.existing,
+    this.generated = false,
   });
 
-  /// The entry's path inside the archive, before renaming.
+  /// The entry's path inside the archive, before renaming. For a [generated]
+  /// file, the same as [to].
   final String from;
 
   /// Where it would land under the target, after renaming.
@@ -60,6 +62,10 @@ class PlannedFile {
   /// there, it is not valid UTF-8, or the plan was built without content.
   final String? existing;
 
+  /// Whether the file is written by mold rather than taken from the archive —
+  /// the unpack stamp.
+  final bool generated;
+
   /// Whether the path itself changes.
   bool get renamed => from != to;
 
@@ -80,6 +86,7 @@ class UnpackPlan {
     required this.values,
     this.targetDir,
     this.overwrite = false,
+    this.stale = const [],
   });
 
   /// One entry per archive file, in archive order.
@@ -97,6 +104,14 @@ class UnpackPlan {
 
   /// Whether the plan writes into an occupied target.
   final bool overwrite;
+
+  /// Files the previous unpack into this target wrote, per its stamp, that
+  /// the template no longer has and that are still there.
+  ///
+  /// Left in place, never deleted — they may have been edited since — but
+  /// worth knowing about when regenerating: they are what a fresh unpack of
+  /// the same template would not contain.
+  final List<String> stale;
 
   /// Files whose path changes.
   Iterable<PlannedFile> get renamed => files.where((f) => f.renamed);

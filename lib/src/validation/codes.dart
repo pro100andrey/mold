@@ -177,4 +177,11 @@ abstract final class MoldCode {
 
   /// ⚠ A failed write could not be fully undone.
   static const String unpackUndoIncomplete = Unbundler.undoIncomplete;
+
+  /// ⚠ Files the previous unpack wrote are no longer in the template; they
+  /// were left in place.
+  static const String unpackStaleFiles = Unbundler.staleFiles;
+
+  /// ⚠ The target's `.mold.json` is not a mold stamp.
+  static const String unpackStampInvalid = Unbundler.stampInvalid;
 }

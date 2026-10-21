@@ -1,0 +1,295 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:args/args.dart';
+import 'package:path/path.dart' as p;
+
+import '../archive/archive_writer.dart';
+import '../bundler/bundler.dart';
+import '../bundler/project_validator.dart';
+import '../manifest/manifest.dart';
+import '../output/embed_source.dart';
+import '../output/output_format.dart';
+import '../prompt/variable_resolver.dart';
+import '../unbundler/unbundler.dart';
+import '../util/bytes.dart';
+import 'command_base.dart';
+import 'plan_report.dart';
+
+/// `mold pack <source_dir>` — capture a project into an archive.
+class PackCommand extends MoldCommand {
+  PackCommand(super.out, super.err) {
+    argParser
+      ..addOption(
+        'manifest',
+        abbr: 'm',
+        help: 'Path to the manifest (default: <dir>/mold.yaml).',
+      )
+      ..addOption(
+        'output',
+        abbr: 'o',
+        help: 'Output path (default: ./<name>.mold).',
+      )
+      ..addOption(
+        'name',
+        abbr: 'n',
+        help: 'Output file name stem (overrides manifest name).',
+      )
+      ..addOption(
+        'format',
+        abbr: 'f',
+        allowed: OutputFormat.values.map((f) => f.flag),
+        defaultsTo: OutputFormat.tarGz.flag,
+        help: 'Output format: tar.gz file, or an embeddable Dart source.',
+      )
+      ..addOption(
+        'level',
+        help: 'gzip level, 0 (store, fastest) to 9 (smallest).',
+        defaultsTo: '${ArchiveWriter.defaultLevel}',
+      );
+    addVarOptions(', for previewing with --diff');
+    argParser
+      ..addFlag(
+        'dry-run',
+        negatable: false,
+        help: 'Validate and list what would be captured, without writing.',
+      )
+      ..addFlag(
+        'diff',
+        negatable: false,
+        help:
+            'Preview the renames this manifest would make '
+            '(implies --dry-run).',
+      )
+      ..addFlag(
+        'check',
+        negatable: false,
+        help:
+            'Exit 1 if the output file is not what packing would write now; '
+            'write nothing. For CI over a committed archive or embed source.',
+      );
+  }
+
+  @override
+  String get name => 'pack';
+
+  @override
+  String get description => 'Pack a project directory into a template archive.';
+
+  @override
+  String get invocation => 'mold pack <source_dir> [options]';
+
+  @override
+  Future<int> execute(ArgResults results) async {
+    if (results.rest.isEmpty) {
+      throw const CliException('Missing <source_dir>.');
+    }
+    final sourceDir = results.rest.first;
+    final check = results['check'] as bool;
+    if (check && (results['dry-run'] as bool || results['diff'] as bool)) {
+      throw const CliException(
+        '--check compares what packing would write; it cannot be combined '
+        'with --dry-run or --diff.',
+      );
+    }
+
+    final manifestPath =
+        (results['manifest'] as String?) ?? _defaultManifestPath(sourceDir);
+    final manifest = Manifest.fromFile(manifestPath);
+    final format = OutputFormat.fromFlag(results['format'] as String);
+    final level = _level(results['level'] as String);
+
+    final packVars = varsOf(results);
+    if (results['diff'] as bool) {
+      return _previewPack(sourceDir, manifest, packVars);
+    }
+
+    if (packVars.isNotEmpty) {
+      // Packing substitutes nothing, so a value passed here can only be for
+      // the preview. Silently dropping it would leave the user believing it
+      // took effect.
+      throw const CliException(
+        '--var only affects `pack --diff`; packing performs no '
+        'substitution. Drop it, or add --diff to preview.',
+      );
+    }
+
+    if (results['dry-run'] as bool) {
+      return _dryRunPack(sourceDir, manifest);
+    }
+
+    final archive = await Bundler(
+      compressionLevel: level,
+    ).bundle(projectDir: sourceDir, manifest: manifest, onWarning: warn);
+    // One stem drives both the file name and the generated const identifier;
+    // rendering from manifest.name here would make `-n foo` write foo.dart
+    // declaring kDemoTemplate.
+    final stem = (results['name'] as String?) ?? manifest.name;
+    final content = _render(format, archive, stem);
+
+    final ext = format == OutputFormat.tarGz ? 'mold' : 'dart';
+    final outputPath = (results['output'] as String?) ?? './$stem.$ext';
+
+    if (check) {
+      return _check(outputPath, content);
+    }
+
+    File(outputPath)
+      ..parent.createSync(recursive: true)
+      ..writeAsBytesSync(content);
+
+    if (wantsJson) {
+      emitJson({'output': outputPath, 'bytes': content.length});
+    } else {
+      err.writeln('Wrote $outputPath (${content.length} bytes).');
+    }
+    return 0;
+  }
+
+  /// Compares [content] with the file at [outputPath], writing nothing.
+  ///
+  /// Meaningful only because packing is reproducible: the same tree and
+  /// manifest at the same level give the same bytes, so a difference means
+  /// the committed file is stale, never that the clock moved.
+  int _check(String outputPath, List<int> content) {
+    final file = File(outputPath);
+    final current = file.existsSync() ? file.readAsBytesSync() : null;
+    final upToDate = current != null && sameBytes(current, content);
+
+    if (wantsJson) {
+      emitJson({'output': outputPath, 'upToDate': upToDate});
+    } else if (upToDate) {
+      err.writeln('Up to date: $outputPath.');
+    } else {
+      err.writeln(
+        current == null
+            ? 'Stale: $outputPath does not exist. Run without --check to '
+                  'write it.'
+            : 'Stale: $outputPath differs from what packing writes now. Run '
+                  'without --check to regenerate it.',
+      );
+    }
+
+    return upToDate ? 0 : 1;
+  }
+
+  /// Validates and reports what a pack would capture, without writing.
+  ///
+  /// A preflight rather than a preview of substitution: packing performs no
+  /// substitution at all, so there is nothing to diff. What it can tell you is
+  /// whether the manifest is right — which files land in the template, which
+  /// symlinks were left out and why, and whether every `replaces` token is
+  /// distinctive enough to be safe.
+  int _dryRunPack(String sourceDir, Manifest manifest) {
+    // One scan, shared with the validator — see Bundler.bundle.
+    final scanned = Directory(sourceDir).existsSync()
+        ? ProjectValidator.scanFor(sourceDir, manifest)
+        : null;
+    const ProjectValidator()
+        .validate(
+          ProjectInput(dir: sourceDir, manifest: manifest, scan: scanned),
+        )
+        .report(warn);
+
+    // Falls back rather than asserting — see Bundler.bundle.
+    final scan = scanned ?? ProjectValidator.scanFor(sourceDir, manifest);
+
+    if (wantsJson) {
+      emitJson({
+        'files': scan.files,
+        'gitignored': scan.gitignored,
+        'skippedLinks': {
+          for (final MapEntry(:key, :value) in scan.skippedLinks.entries)
+            key: value.name,
+        },
+      });
+      return 0;
+    }
+
+    err.writeln(
+      'Dry run — nothing written. ${scan.files.length} files would be '
+      'captured, ${scan.gitignored} gitignored, '
+      '${scan.skippedLinks.length} symlinks skipped.',
+    );
+    for (final rel in scan.files) {
+      err.writeln('  $rel');
+    }
+
+    return 0;
+  }
+
+  /// Previews the renames this manifest would make, without writing anything.
+  ///
+  /// Packing itself substitutes nothing, so there is no diff in the pack step
+  /// — but the question a template author actually has is "are my rules
+  /// right", and answering it should not require distributing the template
+  /// first. The archive is built in memory and handed straight to the same
+  /// planner `unpack --diff` uses, with no destination.
+  ///
+  /// Values come from `--var`, `--vars-file` and manifest defaults only;
+  /// `pack` never prompts, so it stays usable from CI.
+  Future<int> _previewPack(
+    String sourceDir,
+    Manifest manifest,
+    Map<String, String> vars,
+  ) async {
+    final archive = await const Bundler().bundle(
+      projectDir: sourceDir,
+      manifest: manifest,
+      onWarning: warn,
+    );
+    // No onWarning here, deliberately: `bundle` above already ran the manifest
+    // phase and reported it. Passing one would print every manifest warning
+    // twice, because the planner validates the same manifest a second time.
+    final plan = const Unbundler().plan(
+      bytes: archive,
+      vars: vars,
+      resolver: const VariableResolver(noPrompt: true),
+    );
+
+    if (wantsJson) {
+      emitJson(planJson(plan, showDiff: true, applied: false));
+    } else {
+      err.writeln('Preview — nothing written.');
+      printPlan(err, plan, showDiff: true, applied: false);
+    }
+
+    return 0;
+  }
+
+  /// Renders the archive into the bytes to write for [format]: raw archive for
+  /// `tar.gz`, or the UTF-8 of an embeddable Dart source otherwise.
+  List<int> _render(OutputFormat format, List<int> archive, String name) {
+    const embed = EmbedSource();
+    switch (format) {
+      case .tarGz:
+        return archive;
+      case .bytes:
+        return utf8.encode(embed.bytesSource(archive: archive, name: name));
+      case .base64:
+        return utf8.encode(embed.base64Source(archive: archive, name: name));
+    }
+  }
+
+  /// Resolves the default manifest path. There is no fallback: if the default
+  /// `mold.yaml` is absent and `-m` was not given, it is an error.
+  String _defaultManifestPath(String sourceDir) {
+    final path = p.join(sourceDir, 'mold.yaml');
+    if (!File(path).existsSync()) {
+      throw CliException(
+        "No manifest: '$path' not found and --manifest not given.",
+      );
+    }
+
+    return path;
+  }
+
+  static int _level(String raw) {
+    final level = int.tryParse(raw);
+    if (level == null || level < 0 || level > 9) {
+      throw CliException('--level must be 0 to 9, got: $raw');
+    }
+
+    return level;
+  }
+}

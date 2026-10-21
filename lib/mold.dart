@@ -19,8 +19,9 @@ export 'src/output/embed_source.dart' show EmbedSource;
 export 'src/output/unified_diff.dart' show UnifiedDiff;
 export 'src/prompt/variable_prompter.dart' show LineReader, VariablePrompter;
 export 'src/prompt/variable_resolver.dart' show VariableResolver;
-export 'src/unbundler/unbundler.dart' show Unbundler;
+export 'src/unbundler/unbundler.dart' show TemplateInfo, Unbundler;
 export 'src/unbundler/unpack_plan.dart' show PlannedFile, UnpackPlan;
+export 'src/unbundler/unpack_stamp.dart' show UnpackStamp;
 export 'src/validation/codes.dart' show MoldCode;
 export 'src/validation/validation_error.dart'
     show Severity, ValidationError, WarningSink;

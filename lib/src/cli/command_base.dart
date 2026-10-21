@@ -1,0 +1,190 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:args/args.dart';
+import 'package:args/command_runner.dart';
+import 'package:yaml/yaml.dart';
+
+import '../unbundler/unpack_stamp.dart';
+import '../validation/validation_error.dart';
+import '../validation/validation_result.dart';
+
+/// Thrown for user-facing CLI errors (bad args, missing files). The runner
+/// turns it into a clean stderr message + exit code 64.
+class CliException implements Exception {
+  const CliException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// What every `mold` subcommand shares: the two output sinks, `--json`, and
+/// one way of turning failures into exit codes.
+///
+/// Human-facing text goes to [err] — it is commentary on the work, not its
+/// product, and keeping it off stdout is what lets `--json` own stdout
+/// entirely. Under `--json`, warnings are collected into the document instead
+/// of printed, and a validation failure is a document too (`errors`), so a
+/// tool reading stdout always gets JSON and an exit code.
+abstract class MoldCommand extends Command<int> {
+  MoldCommand(this.out, this.err) {
+    argParser.addFlag(
+      'json',
+      negatable: false,
+      help: 'Print the result as JSON on stdout, warnings included.',
+    );
+  }
+
+  /// The product of the command under `--json`.
+  final StringSink out;
+
+  /// Everything meant for a person.
+  final StringSink err;
+
+  final List<ValidationError> _warnings = [];
+
+  /// Whether `--json` was given.
+  bool get wantsJson => argResults!['json'] as bool;
+
+  /// Reports a warning: printed, or kept for the JSON document.
+  void warn(ValidationError warning) {
+    if (wantsJson) {
+      _warnings.add(warning);
+    } else {
+      err.writeln('Warning: $warning');
+    }
+  }
+
+  /// Writes [doc] to [out] as the command's JSON result, with the warnings.
+  void emitJson(Map<String, Object?> doc) {
+    out.writeln(
+      const JsonEncoder.withIndent('  ').convert({
+        ...doc,
+        'warnings': [for (final w in _warnings) issueJson(w)],
+      }),
+    );
+  }
+
+  /// The command body; [run] maps what it throws to exit codes.
+  Future<int> execute(ArgResults results);
+
+  @override
+  Future<int> run() async {
+    try {
+      return await execute(argResults!);
+    } on CliException catch (e) {
+      err.writeln(e.message);
+      return 64;
+    } on ValidationException catch (e) {
+      if (wantsJson) {
+        emitJson({
+          'errors': [for (final error in e.errors) issueJson(error)],
+        });
+      } else {
+        err.writeln(e.toString());
+      }
+      return 1;
+    } on FormatException catch (e) {
+      err.writeln(e.message);
+      return 1;
+    }
+  }
+
+  /// The `--var` and `--vars-file` values of [results], merged.
+  ///
+  /// The file is read first and `--var` applied over it: a file of shared
+  /// values with one overridden on the command line is the common case, and
+  /// the override is as explicit as anything typed can be. A key repeated
+  /// within `--var` itself is still an error — that one is ambiguous.
+  Map<String, String> varsOf(ArgResults results) => {
+    if (results['vars-file'] case final String path) ...readVarsFile(path),
+    ...parseVars(results['var'] as List<String>),
+  };
+
+  /// Declares `--var` and `--vars-file`, with [purpose] in the help.
+  void addVarOptions(String purpose) {
+    argParser
+      ..addMultiOption(
+        'var',
+        abbr: 'v',
+        help: 'Variable value as key=value (repeatable)$purpose.',
+      )
+      ..addOption(
+        'vars-file',
+        help:
+            'YAML or JSON map of variable values, or a .mold.json stamp; '
+            '--var overrides it.',
+      );
+  }
+}
+
+/// [issue] as a JSON object.
+Map<String, Object?> issueJson(ValidationError issue) => {
+  'code': issue.code,
+  'severity': issue.severity.name,
+  'message': issue.message,
+  'field': ?issue.field,
+};
+
+/// Parses repeated `key=value` pairs into a map. Splits on the first `=`.
+Map<String, String> parseVars(List<String> raw) {
+  final out = <String, String>{};
+  for (final entry in raw) {
+    final eq = entry.indexOf('=');
+    if (eq <= 0) {
+      throw CliException("Invalid --var '$entry'; expected key=value.");
+    }
+    final key = entry.substring(0, eq);
+    // Keeping the last silently discarded the first, which is the same class
+    // of quiet drop VARIABLE_UNKNOWN exists to prevent.
+    if (out.containsKey(key)) {
+      throw CliException(
+        "Repeated --var '$key'; it was given more than once. Pass it once.",
+      );
+    }
+    out[key] = entry.substring(eq + 1);
+  }
+
+  return out;
+}
+
+/// Reads variable values from the file at [path]: a YAML (or JSON) map of
+/// scalars, or an [UnpackStamp], whose `vars` it takes — so a project
+/// regenerated from its own stamp gets the values it was made with.
+///
+/// Keys are checked against the template like `--var` keys are, so a stale
+/// or mistyped one is `VARIABLE_UNKNOWN` rather than ignored.
+Map<String, String> readVarsFile(String path) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    throw CliException('Vars file not found: $path');
+  }
+  final text = file.readAsStringSync();
+
+  final Object? doc;
+  try {
+    doc = loadYaml(text);
+  } on YamlException catch (e) {
+    throw CliException('Vars file $path is not YAML or JSON: ${e.message}');
+  }
+  if (doc is! YamlMap) {
+    throw CliException('Vars file $path must hold a map of values.');
+  }
+  if (doc.containsKey('mold_stamp')) {
+    final stamp = UnpackStamp.tryParse(text);
+    if (stamp == null) {
+      throw CliException('Vars file $path looks like a stamp but is not one.');
+    }
+    return stamp.vars;
+  }
+
+  return {
+    for (final MapEntry(:key, :value) in doc.entries)
+      '$key': switch (value) {
+        String() || num() || bool() => '$value',
+        _ => throw CliException(
+          "Vars file $path: '$key' must be a single value, not $value.",
+        ),
+      },
+  };
+}
