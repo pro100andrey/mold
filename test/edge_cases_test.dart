@@ -27,6 +27,39 @@ void main() {
     isA<ValidationException>().having((e) => e.codes, 'codes', [code]),
   );
 
+  group('two variables deriving the same casings', () {
+    test('both find their token in the project', () {
+      write(src, 'a.txt', 'my_app MyApp');
+
+      final result = const ProjectValidator().validate(
+        ProjectInput(
+          dir: src.path,
+          manifest: const Manifest(
+            name: 't',
+            version: '1',
+            variables: [
+              TemplateVariable(name: 'a', replaces: 'my_app'),
+              TemplateVariable(name: 'b', replaces: 'my-app'),
+            ],
+          ),
+        ),
+      );
+
+      expect(result.errors, isEmpty);
+    });
+  });
+
+  test('a root .mold.json that is not a stamp is packed', () {
+    write(src, '.mold.json', '{"theme": "dark"}');
+
+    final scan = ProjectValidator.scanFor(
+      src.path,
+      const Manifest(name: 't', version: '1'),
+    );
+
+    expect(scan.files, contains('.mold.json'));
+  });
+
   group('a manifest that is not UTF-8', () {
     // `name: café` in Latin-1: 0xE9 is no UTF-8 sequence.
     final latin1Yaml = [...utf8.encode('name: caf'), 0xE9, 10];
@@ -122,6 +155,65 @@ void main() {
     });
   });
 
+  group("another template's stamp in the target", () {
+    late String target;
+
+    setUp(() async {
+      write(src, 'a.txt', 'a');
+      target = p.join(tmp.path, 'out');
+      await const Unbundler().unbundle(
+        bytes: await const Bundler().bundle(
+          projectDir: src.path,
+          manifest: const Manifest(name: 'app', version: '1'),
+        ),
+        targetDir: target,
+        stamp: true,
+      );
+    });
+
+    Future<List<int>> addOn() {
+      final other = Directory(p.join(tmp.path, 'addon'))..createSync();
+      write(other, 'b.txt', 'b');
+      return const Bundler().bundle(
+        projectDir: other.path,
+        manifest: const Manifest(name: 'addon', version: '1'),
+      );
+    }
+
+    test('is reported, not used, and left alone', () async {
+      final stampFile = File(p.join(target, UnpackStamp.fileName));
+      final before = stampFile.readAsStringSync();
+      final warnings = <ValidationError>[];
+
+      final plan = const Unbundler().plan(
+        bytes: await addOn(),
+        targetDir: target,
+        overwrite: true,
+        onWarning: warnings.add,
+      );
+      await const Unbundler().apply(plan);
+
+      expect(warnings.map((w) => w.code), [MoldCode.unpackStampForeign]);
+      expect(plan.stale, isEmpty, reason: "a.txt is the other template's");
+      expect(plan.files.map((f) => f.to), ['b.txt']);
+      expect(stampFile.readAsStringSync(), before);
+    });
+
+    test('refuses a new stamp', () async {
+      final archive = await addOn();
+
+      expect(
+        () => const Unbundler().plan(
+          bytes: archive,
+          targetDir: target,
+          overwrite: true,
+          stamp: true,
+        ),
+        failsWith(MoldCode.unpackStampForeign),
+      );
+    });
+  });
+
   group('a stale file', () {
     test('differing from a written one only in case', () async {
       write(src, 'lib/MyApp.txt', 'v1');
@@ -151,6 +243,44 @@ void main() {
       expect(plan.stale, caseSensitive ? ['lib/MyApp.txt'] : isEmpty);
     });
   });
+
+  test(
+    "a file the stamp wrote under another casing is not the project's own",
+    () async {
+      write(src, 'lib/MyApp.txt', 'v1');
+      final target = p.join(tmp.path, 'out');
+      Future<List<int>> pack() => const Bundler().bundle(
+        projectDir: src.path,
+        manifest: const Manifest(name: 't', version: '1'),
+      );
+      await const Unbundler().unbundle(
+        bytes: await pack(),
+        targetDir: target,
+        stamp: true,
+      );
+      File(p.join(src.path, 'lib/MyApp.txt')).deleteSync();
+      write(src, 'lib/Myapp.txt', 'v2');
+      // A second name for the same file: what a case-insensitive filesystem
+      // makes of `Myapp.txt` when `MyApp.txt` is there.
+      Process.runSync('ln', [
+        p.join(target, 'lib/MyApp.txt'),
+        p.join(target, 'lib/Myapp.txt'),
+      ]);
+      final warnings = <ValidationError>[];
+
+      final plan = const Unbundler().plan(
+        bytes: await pack(),
+        targetDir: target,
+        overwrite: true,
+        onWarning: warnings.add,
+      );
+
+      expect(plan.edited, isEmpty);
+      expect(plan.stale, isEmpty);
+      expect(warnings, isEmpty);
+    },
+    testOn: '!windows',
+  );
 
   test(
     'an unreadable file fails the pack after the warnings',

@@ -255,7 +255,19 @@ A regeneration rewrites only files that change: one identical to what is
 there is compared, not written, so mtimes — and build caches and file
 watchers — are left alone. A stamp at a project's root is never packed into a
 template: it describes one unpack into one directory, and would hand every
-later unpack its author's values and history.
+later unpack its author's values and history. Only a stamp — a `.mold.json`
+that is some other tool's file is packed like any other.
+
+A stamp belongs to one template. Unpacking another into the same directory
+with `--force` — an add-on template into a project made from a first one —
+reports `UNPACK_STAMP_FOREIGN` ⚠ and leaves the first one's stamp as it is:
+it is not used to tell stale or edited files, which would call every file of
+the first template stale, and not rewritten for the second. With `--stamp` it
+is an error, since one `.mold.json` cannot describe both.
+
+On macOS and Windows, a path whose casing changed between unpacks
+(`MyApp.swift` → `Myapp.swift`, after a value's casing changed) is the same
+file, and treated as one: neither stale nor the project's own.
 
 `--vars-file` also takes a plain YAML or JSON map of values. `--var` applies
 over it; a key the template does not declare is `VARIABLE_UNKNOWN`, as for
@@ -660,9 +672,11 @@ Preview — nothing written.
 +    gtk_window_set_title(window, "tempo");
 ```
 
-The archive is built in memory and handed to the same planner `unpack --diff`
-uses, so the two cannot disagree. Values come from `--var` and manifest
-defaults only — `pack` never prompts, so it stays usable from CI.
+The files are read and checked as a pack would, then handed to the same
+planner `unpack --diff` uses, so the two cannot disagree — and an unpack's
+warnings, such as a value already in the template, show up in the preview
+too. Nothing is compressed. Values come from `--var`, `--vars-file` and
+manifest defaults only — `pack` never prompts, so it stays usable from CI.
 
 ---
 
@@ -727,6 +741,7 @@ stderr.
 | unpack | `RENAME_CASE_COLLISION` ⚠           | renamed paths differ only in case              |
 | unpack | `UNPACK_STALE_FILES` ⚠              | files the template dropped, left in place      |
 | unpack | `UNPACK_STAMP_INVALID` ⚠            | the target's `.mold.json` is not a stamp       |
+| unpack | `UNPACK_STAMP_FOREIGN` ⚠            | the target's stamp is another template's       |
 | unpack | `UNPACK_OVERWRITES_EDITS` ⚠         | overwriting files edited since the stamp       |
 | unpack | `UNPACK_CHMOD_FAILED` ⚠             | files written, but not made executable         |
 | unpack | `UNPACK_UNDO_INCOMPLETE` ⚠          | a failed write could not be fully undone       |

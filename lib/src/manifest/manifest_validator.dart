@@ -172,7 +172,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
   ///
   /// The replacement table is keyed by casing, so a shared one belongs to the
   /// later variable and the earlier one silently loses those sites —
-  /// `my_app` and `my-app` share every casing but kebab. Containment is not
+  /// `my_app` and `my-app` derive the very same four. Containment is not
   /// reported: `app` inside `my_app` resolves by longest match, which is
   /// well-defined.
   static List<ValidationError> _conflictingTokens(

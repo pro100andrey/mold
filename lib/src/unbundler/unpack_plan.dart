@@ -43,12 +43,14 @@ class PlannedFile {
   /// Whether the file would be made owner-executable.
   final bool executable;
 
-  /// The decoded content before substitution; null when [verbatim] or when the
-  /// plan was built without content.
+  /// The decoded content before substitution; null when the content is not
+  /// valid UTF-8 or the plan was built without content.
+  ///
+  /// A [verbatim] file that is text has it too, equal to [after].
   final String? before;
 
-  /// The decoded content after substitution; null when [verbatim] or when the
-  /// plan was built without content.
+  /// The decoded content after substitution; null when the content is not
+  /// valid UTF-8 or the plan was built without content.
   final String? after;
 
   /// Whether a file is already at [to] in the target, so writing this one
@@ -129,8 +131,12 @@ class UnpackPlan {
   /// Files whose content changes.
   Iterable<PlannedFile> get rewritten => files.where((f) => f.replacements > 0);
 
-  /// Files nothing happens to.
-  Iterable<PlannedFile> get untouched => files.where((f) => !f.changed);
+  /// The template's own files: [files] without the [PlannedFile.generated]
+  /// stamp.
+  Iterable<PlannedFile> get templateFiles => files.where((f) => !f.generated);
+
+  /// Template files nothing happens to.
+  Iterable<PlannedFile> get untouched => templateFiles.where((f) => !f.changed);
 
   /// Files whose path is free in the target.
   Iterable<PlannedFile> get created => files.where((f) => !f.overwrites);

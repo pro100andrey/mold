@@ -151,6 +151,21 @@ extra_substitutions:
       expect((await mold(['pack', project.path, '-o', out, '--check'])).$1, 0);
     });
 
+    test('a vars file without --diff is refused by its own name', () async {
+      final vars = File(p.join(tmp.path, 'vars.yaml'))
+        ..writeAsStringSync('name: my_app\n');
+
+      final (code, _, err) = await mold([
+        'pack',
+        project.path,
+        '--vars-file',
+        vars.path,
+      ]);
+
+      expect(code, 64);
+      expect(err, startsWith('--vars-file only affects'));
+    });
+
     test('a bad --level is a usage error', () async {
       expect((await mold(pack(['--level', '10']))).$1, 64);
     });
@@ -194,6 +209,55 @@ extra_substitutions:
         hasLength(1),
         reason: err,
       );
+    });
+  });
+
+  group('unpack --diff over a target', () {
+    test('shows a text file copied verbatim as text', () async {
+      write(project, 'mold.yaml', '''
+name: super_server
+version: 1.2.0
+no_substitute: [notes.txt]
+''');
+      write(project, 'notes.txt', 'new line\n');
+      expect((await mold(['pack', project.path, '-o', archive])).$1, 0);
+      write(Directory(target()), 'notes.txt', 'old line\n');
+
+      final (code, _, err) = await mold([
+        'unpack',
+        archive,
+        '-t',
+        target(),
+        '--force',
+        '--diff',
+      ]);
+
+      expect(code, 0, reason: err);
+      expect(err, isNot(contains('Binary file notes.txt')));
+      expect(err, stringContainsInOrder(['-old line', '+new line']));
+    });
+
+    test('counts the stamp apart from the template files', () async {
+      final (code, out, err) = await mold([
+        'unpack',
+        archive,
+        '-t',
+        target(),
+        '--no-prompt',
+        '--var',
+        'name=my_app',
+        '--stamp',
+        '--dry-run',
+        '--json',
+      ]);
+
+      expect(code, 0, reason: err);
+      final summary =
+          (jsonDecode(out) as Map<String, Object?>)['summary']!
+              as Map<String, Object?>;
+      // mold.yaml, pubspec.yaml and lib/super_server.dart; not .mold.json.
+      expect(summary['files'], 3);
+      expect(summary['unchanged'], 0);
     });
   });
 
@@ -461,7 +525,16 @@ variables:
     test("a project's own stamp is never packed", () async {
       // A stamped project packed back into a template must not hand its
       // author's values and history to every later unpack.
-      write(project, '.mold.json', '{"mold_stamp": 1}');
+      write(
+        project,
+        '.mold.json',
+        const UnpackStamp(
+          template: 't',
+          version: '1',
+          vars: {'name': 'mine'},
+          files: {},
+        ).toJson(),
+      );
       expect((await mold(['pack', project.path, '-o', archive])).$1, 0);
 
       final (_, _, err) = await mold(['inspect', archive, '--files']);

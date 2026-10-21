@@ -61,13 +61,19 @@ class CasingNeedle {
       return isAlnum(unit);
     }
 
-    return _isLower(unit) ||
-        (_isDigit(unit) && _isDigit(text.codeUnitAt(text.length - 1)));
+    return isLower(unit) ||
+        (isDigit(unit) && isDigit(text.codeUnitAt(text.length - 1)));
   }
 
   /// An ASCII letter or digit.
-  static bool isAlnum(int u) => _isLower(u) || _isUpper(u) || _isDigit(u);
-  static bool _isLower(int u) => u >= 0x61 && u <= 0x7A;
-  static bool _isUpper(int u) => u >= 0x41 && u <= 0x5A;
-  static bool _isDigit(int u) => u >= 0x30 && u <= 0x39;
+  static bool isAlnum(int u) => isLower(u) || isUpper(u) || isDigit(u);
+
+  /// An ASCII lowercase letter.
+  static bool isLower(int u) => u >= 0x61 && u <= 0x7A;
+
+  /// An ASCII uppercase letter.
+  static bool isUpper(int u) => u >= 0x41 && u <= 0x5A;
+
+  /// An ASCII digit.
+  static bool isDigit(int u) => u >= 0x30 && u <= 0x39;
 }

@@ -149,13 +149,25 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   /// An unpack stamp at the root is never packed. It records one unpack into
   /// one directory — its values, its files, their digests — so a template
   /// carrying its author's would hand every later unpack the author's values
-  /// and make it judge stale and edited files by the author's history.
+  /// and make it judge stale and edited files by the author's history. Only a
+  /// stamp: a `.mold.json` of some other tool's is the project's own file, and
+  /// leaving it out by its name alone dropped it from every unpack in silence.
   static ScanResult scanFor(String dir, Manifest manifest) => FileScanner(
     include: manifest.include,
     exclude: manifest.exclude,
     useGitignore: manifest.useGitignore,
-    reserved: const {UnpackStamp.fileName},
+    reserved: {if (_holdsStamp(dir)) UnpackStamp.fileName},
   ).scan(dir);
+
+  static bool _holdsStamp(String dir) {
+    final file = File(p.join(dir, UnpackStamp.fileName));
+    try {
+      return file.existsSync() &&
+          UnpackStamp.tryParse(file.readAsStringSync()) != null;
+    } on FileSystemException {
+      return false; // Unreadable or not UTF-8: not a stamp mold wrote.
+    }
+  }
 
   @override
   ValidationResult validate(ProjectInput input) {
@@ -471,7 +483,9 @@ class _Site {
   _Site({this.needle, this.stats});
 
   CasingNeedle? needle;
-  _TokenStats? stats;
+
+  /// The tokens deriving [needle] — more than one when they share a casing.
+  List<_TokenStats>? stats;
   _RuleUse? rule;
 }
 
@@ -571,20 +585,18 @@ class _Variants {
   static bool _whole(String hay, int start, int end) {
     if (start > 0 &&
         CasingNeedle.isAlnum(hay.codeUnitAt(start - 1)) &&
-        _isLower(hay.codeUnitAt(start))) {
+        CasingNeedle.isLower(hay.codeUnitAt(start))) {
       return false;
     }
     if (end < hay.length) {
       final next = hay.codeUnitAt(end);
-      if (_isLower(next) || (next >= 0x30 && next <= 0x39)) {
+      if (CasingNeedle.isLower(next) || CasingNeedle.isDigit(next)) {
         return false;
       }
     }
 
     return true;
   }
-
-  static bool _isLower(int u) => u >= 0x61 && u <= 0x7A;
 }
 
 /// The token check's matcher: every literal substitution would act on, in
@@ -601,12 +613,18 @@ class _Variants {
 class _Search {
   factory _Search(Manifest manifest, Iterable<String> tokens) {
     final stats = <String, _TokenStats>{};
-    final needles = <String, (CasingNeedle, _TokenStats)>{};
+    final needles = <String, (CasingNeedle, List<_TokenStats>)>{};
     for (final token in tokens) {
       final s = stats.putIfAbsent(token, _TokenStats.new);
-      // A later variable wins a shared casing, as in the substitution table.
+      // A casing two tokens share is counted for both. Unpacking gives it to
+      // the later variable — MANIFEST_CONFLICTING_TOKENS says so — but the
+      // earlier token does occur, and crediting the later one alone failed
+      // the pack with "does not occur in the project".
       for (final needle in CasingNeedle.casingsOf(token)) {
-        needles[needle.text] = (needle, s);
+        final owners = (needles[needle.text] ??= (needle, [])).$2;
+        if (!owners.contains(s)) {
+          owners.add(s);
+        }
       }
     }
 
@@ -615,8 +633,9 @@ class _Search {
       Map<String, _RuleUse> uses,
     ) {
       final out = {
-        for (final MapEntry(key: text, value: (needle, s)) in needles.entries)
-          text: _Site(needle: needle, stats: s),
+        for (final MapEntry(key: text, value: (needle, owners))
+            in needles.entries)
+          text: _Site(needle: needle, stats: owners),
       };
       for (final rule in rules) {
         final use = uses.putIfAbsent(rule.from, () => _RuleUse(rule.from));
@@ -642,8 +661,8 @@ class _Search {
       needlePattern: Substitutor.alternation(needles.keys),
       variants: _Variants(stats, needles.keys.toSet()),
       needleStats: {
-        for (final MapEntry(key: text, value: (_, s)) in needles.entries)
-          text: s,
+        for (final MapEntry(key: text, value: (_, owners)) in needles.entries)
+          text: owners,
       },
     );
   }
@@ -677,7 +696,7 @@ class _Search {
   final RegExp? _contentPattern;
   final RegExp? _pathPattern;
   final RegExp? _needlePattern;
-  final Map<String, _TokenStats> _needleStats;
+  final Map<String, List<_TokenStats>> _needleStats;
 
   /// Whether there is nothing to look for at all.
   bool get isEmpty => _contentPattern == null && _pathPattern == null;
@@ -712,7 +731,7 @@ class _Search {
 
     final found = <_TokenStats>{
       for (final m in pattern.allMatches(latin1.decode(data)))
-        _needleStats[m[0]!]!,
+        ..._needleStats[m[0]!]!,
     };
     for (final s in found) {
       s.verbatimFiles.add(rel);
@@ -740,7 +759,9 @@ class _Search {
       }
       final needle = site.needle;
       if (needle != null) {
-        _record(hay, m.start, m.end, needle, site.stats!);
+        for (final owner in site.stats!) {
+          _record(hay, m.start, m.end, needle, owner);
+        }
       }
     }
 

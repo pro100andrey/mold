@@ -71,10 +71,12 @@ void printPlan(
   if (target != null && !applied) {
     err.writeln('Dry run — nothing written to $target.');
   }
+  final stamped = plan.files.any((f) => f.generated);
   err.writeln(
-    '  ${plan.files.length} files: ${renamed.length} renamed, '
+    '  ${plan.templateFiles.length} files: ${renamed.length} renamed, '
     '${rewritten.length} rewritten (${plan.totalReplacements} '
-    'replacements), ${plan.untouched.length} unchanged.',
+    'replacements), ${plan.untouched.length} unchanged'
+    '${stamped ? '; and the stamp' : ''}.',
   );
   if (overwritten.isNotEmpty) {
     final identical = overwritten.length - replacing.length;
@@ -146,7 +148,8 @@ Map<String, Object?> planJson(
     'applied': applied,
     'values': plan.values,
     'summary': {
-      'files': plan.files.length,
+      'files': plan.templateFiles.length,
+      'stamp': plan.files.any((f) => f.generated),
       'renamed': plan.renamed.length,
       'rewritten': plan.rewritten.length,
       'replacements': plan.totalReplacements,

@@ -60,6 +60,10 @@ class Unbundler {
   /// Overwrites that discard edits made since the stamped unpack.
   static const overwritesEdits = 'UNPACK_OVERWRITES_EDITS';
 
+  /// The target's stamp is another template's: a warning, and an error when
+  /// a stamp is to be written.
+  static const stampForeign = 'UNPACK_STAMP_FOREIGN';
+
   /// Unpacks the archive [bytes] into [targetDir]: [plan], then [apply].
   ///
   /// [vars] holds explicit values; any variable absent from it is resolved by
@@ -195,6 +199,35 @@ class Unbundler {
     WarningSink? onWarning,
   }) {
     final (archive, manifest) = _open(bytes, onWarning);
+
+    return _plan(
+      archive,
+      manifest,
+      targetDir: targetDir,
+      vars: vars,
+      recorded: recorded,
+      resolver: resolver,
+      overwrite: overwrite,
+      stamp: stamp,
+      withContent: withContent,
+      onWarning: onWarning,
+    );
+  }
+
+  /// [plan], from the target phase on, for an archive already opened and
+  /// validated.
+  UnpackPlan _plan(
+    BundleArchive archive,
+    Manifest manifest, {
+    required String? targetDir,
+    required Map<String, String> vars,
+    required Map<String, String> recorded,
+    required VariableResolver? resolver,
+    required bool overwrite,
+    required bool stamp,
+    required bool withContent,
+    required WarningSink? onWarning,
+  }) {
     // A null target means "no destination in mind" — previewing the
     // substitutions of a template that has not been distributed yet. Every
     // other phase still runs.
@@ -202,6 +235,15 @@ class Unbundler {
     if (targetDir != null) {
       target.validate(targetDir).report(onWarning);
     }
+
+    // Without overwrite the target was just validated empty, so nothing in it
+    // can be replaced and there is nothing to look at. Read before the
+    // variables, which may prompt: a stamp that refuses the unpack should do
+    // so before the questions, not after them.
+    final inspect = overwrite ? targetDir : null;
+    final previous = inspect == null
+        ? null
+        : _ownStamp(inspect, manifest, stamp: stamp, onWarning: onWarning);
 
     final resolved = (resolver ?? const VariableResolver()).resolve(
       manifest.variables,
@@ -218,10 +260,6 @@ class Unbundler {
         )
         .report(onWarning);
 
-    // Without overwrite the target was just validated empty, so nothing in it
-    // can be replaced and there is nothing to look at.
-    final inspect = overwrite ? targetDir : null;
-    final previous = inspect == null ? null : _readStamp(inspect, onWarning);
     // Only paths inside the target. A stamp is a file anyone can edit, and
     // one listing `../x` or `/etc/hosts` must not have mold look there, let
     // alone report it as a file of the project's.
@@ -248,6 +286,11 @@ class Unbundler {
     File? existing(String to) =>
         inspect == null ? null : File(p.join(inspect, to));
 
+    // Each destination → the stamp's entry for the file it lands on, when
+    // the stamp has one.
+    final tracked = previous == null
+        ? const <String, String?>{}
+        : _stampEntries(inspect!, previousFiles, archive.files.keys, renames);
     final files = [
       for (final MapEntry(key: from, value: content) in archive.files.entries)
         _planOne(
@@ -260,21 +303,20 @@ class Unbundler {
           existing: existing(renames[from]!),
           stamped: previous == null
               ? null
-              : (previousFiles[renames[from]] ?? _untracked),
+              : (previousFiles[tracked[renames[from]]] ?? _untracked),
           presence: presence,
         ),
     ];
     if (onWarning != null) {
       presence.warnings().forEach(onWarning);
     }
-    final written = {for (final f in files) f.to};
     final edited = [
       for (final f in files)
-        if (f.editedSinceStamp && previousFiles.containsKey(f.to)) f.to,
+        if (f.editedSinceStamp && tracked[f.to] != null) f.to,
     ];
     final untracked = [
       for (final f in files)
-        if (f.editedSinceStamp && !previousFiles.containsKey(f.to)) f.to,
+        if (f.editedSinceStamp && tracked[f.to] == null) f.to,
     ];
     if (edited.isNotEmpty || untracked.isNotEmpty) {
       final editedReason =
@@ -298,11 +340,11 @@ class Unbundler {
     // Stale files stay in the stamp, with the digest they were written with,
     // for as long as they are there: dropping them would report a leftover
     // once and then never again, while it is still in the project.
+    final rewritten = tracked.values.nonNulls.toSet();
     final stale = [
       for (final path in previousFiles.keys)
-        if (!written.contains(path) &&
-            File(p.join(inspect!, path)).existsSync() &&
-            !_writtenUnderAnotherCase(inspect, path, written))
+        if (!rewritten.contains(path) &&
+            File(p.join(inspect!, path)).existsSync())
           path,
     ];
     if (writeStamp) {
@@ -337,33 +379,55 @@ class Unbundler {
     );
   }
 
-  /// Whether [path], in [targetDir], is the very file one of [written] names
-  /// with other casing — as it is on a case-insensitive filesystem (macOS,
-  /// Windows), where a value whose casing changed rewrites `MyApp.swift` as
-  /// `Myapp.swift`. Not a leftover, then, but the file this unpack writes.
-  static bool _writtenUnderAnotherCase(
+  /// For each destination of [renames], the key of [previousFiles] naming
+  /// the file it lands on — or null when the stamp has none.
+  ///
+  /// The same path, or on a case-insensitive filesystem (macOS, Windows) one
+  /// spelled with other casing that is the same file on disk: a value whose
+  /// casing changed rewrites `MyApp.swift` as `Myapp.swift`, which is the
+  /// stamp's file, not the project's own — and its old name is not stale.
+  static Map<String, String?> _stampEntries(
     String targetDir,
-    String path,
-    Set<String> written,
+    Map<String, String> previousFiles,
+    Iterable<String> archived,
+    Map<String, String> renames,
   ) {
-    final folded = path.toLowerCase();
-    for (final to in written) {
-      if (to.length != path.length || to.toLowerCase() != folded) {
-        continue;
+    Map<String, List<String>>? folded;
+    String? entryFor(String to) {
+      if (previousFiles.containsKey(to)) {
+        return to;
       }
-      try {
-        if (FileSystemEntity.identicalSync(
-          p.join(targetDir, path),
-          p.join(targetDir, to),
-        )) {
-          return true;
+      folded ??= _byFoldedCase(previousFiles.keys);
+      for (final key in folded![to.toLowerCase()] ?? const <String>[]) {
+        if (_sameFile(p.join(targetDir, key), p.join(targetDir, to))) {
+          return key;
         }
-      } on FileSystemException {
-        // [to] does not exist yet, so it is not [path].
       }
+
+      return null;
     }
 
-    return false;
+    return {
+      for (final from in archived) renames[from]!: entryFor(renames[from]!),
+    };
+  }
+
+  static Map<String, List<String>> _byFoldedCase(Iterable<String> paths) {
+    final out = <String, List<String>>{};
+    for (final path in paths) {
+      (out[path.toLowerCase()] ??= []).add(path);
+    }
+
+    return out;
+  }
+
+  /// Whether [a] and [b] are one file on disk; false when either is missing.
+  static bool _sameFile(String a, String b) {
+    try {
+      return FileSystemEntity.identicalSync(a, b);
+    } on FileSystemException {
+      return false;
+    }
   }
 
   /// What `stamped` is for a file a stamp exists but does not list: a digest
@@ -373,6 +437,48 @@ class Unbundler {
   /// The key the stamp takes in the rename mapping — not a legal archive
   /// path, so no entry can share it.
   static const _stampKey = '(mold stamp)';
+
+  /// The stamp already in [targetDir], when it is one of [manifest]'s
+  /// template.
+  ///
+  /// A stamp of another template is reported and not used. Unpacking an
+  /// add-on template into a project made from another one is reasonable, and
+  /// judging it by that project's stamp was not: every file the first
+  /// template wrote looked stale, and the stamp was rewritten for the second,
+  /// losing the first one's values and record. With [stamp] it is an error —
+  /// one `.mold.json` describes one template, and replacing it is the loss
+  /// described.
+  static UnpackStamp? _ownStamp(
+    String targetDir,
+    Manifest manifest, {
+    required bool stamp,
+    required WarningSink? onWarning,
+  }) {
+    final found = _readStamp(targetDir, onWarning);
+    if (found == null || found.template == manifest.name) {
+      return found;
+    }
+
+    final what =
+        '${p.join(targetDir, UnpackStamp.fileName)} is the stamp of template '
+        "'${found.template}', not of '${manifest.name}'";
+    ValidationResult([
+      if (stamp)
+        ValidationError(
+          stampForeign,
+          '$what, and one stamp describes one template. Unpack without '
+          '--stamp (`stamp: false`) to leave it as it is.',
+        )
+      else
+        ValidationError.warning(
+          stampForeign,
+          '$what. It is left as it is, and not used to tell stale or edited '
+          'files.',
+        ),
+    ]).report(onWarning);
+
+    return null;
+  }
 
   /// The stamp already in [targetDir], when there is one.
   ///
@@ -490,6 +596,10 @@ class Unbundler {
         : null;
 
     final identical = onDisk != null && sameBytes(onDisk, bytes);
+    // A file copied verbatim is still shown as text when it is text — a
+    // `no_substitute` lock file, say — so an overwrite of it diffs as one
+    // rather than as "binary".
+    final text = withContent ? before ?? _tryDecode(content) : null;
 
     return PlannedFile(
       from: from,
@@ -498,8 +608,8 @@ class Unbundler {
       replacements: replacements,
       bytes: bytes,
       executable: executable,
-      before: withContent ? before : null,
-      after: withContent ? after : null,
+      before: text,
+      after: withContent ? after ?? text : null,
       overwrites: onDisk != null,
       identicalToExisting: identical,
       existing: withContent && onDisk != null ? _tryDecode(onDisk) : null,
@@ -669,6 +779,32 @@ class Unbundler {
     }
   }
 }
+
+/// `Unbundler.plan` for a template `collectBundle` has just read and checked,
+/// with no destination: what `pack --diff` previews.
+///
+/// Not exported. It starts at the variables phase — the archive and manifest
+/// phases are the pack's own checks, already run — so a preview reports each
+/// warning once and compresses nothing.
+UnpackPlan planCollected(
+  BundleArchive archive,
+  Manifest manifest, {
+  Map<String, String> vars = const {},
+  Map<String, String> recorded = const {},
+  VariableResolver? resolver,
+  WarningSink? onWarning,
+}) => const Unbundler()._plan(
+  archive,
+  manifest,
+  targetDir: null,
+  vars: vars,
+  recorded: recorded,
+  resolver: resolver,
+  overwrite: false,
+  stamp: false,
+  withContent: true,
+  onWarning: onWarning,
+);
 
 /// What a failed `Unbundler.apply` has to put back, recorded as it goes.
 ///

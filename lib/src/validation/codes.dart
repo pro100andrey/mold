@@ -209,4 +209,8 @@ abstract final class MoldCode {
 
   /// ⚠ An overwrite discards edits made since the stamped unpack.
   static const String unpackOverwritesEdits = Unbundler.overwritesEdits;
+
+  /// ⚠ The target's stamp is another template's; it is left alone and not
+  /// used. An error when a stamp is to be written.
+  static const String unpackStampForeign = Unbundler.stampForeign;
 }

@@ -129,12 +129,29 @@ whole-file diff.
 - A `mold.yaml` that is not UTF-8 is `MANIFEST_INVALID`, in an archive or a
   file, rather than a bare `FormatException` / `FileSystemException`.
 - `pack --diff` reports what an unpack would warn about —
-  `VARIABLE_VALUE_PRESENT`, `RENAME_CASE_COLLISION` — each warning once. It
-  used to drop every warning of the planning step.
+  `VARIABLE_VALUE_PRESENT`, `RENAME_CASE_COLLISION`. It used to drop every
+  warning of the planning step. It now plans from the files as read, after
+  the pack's checks, so nothing is validated twice and nothing compressed.
 - A pack meeting an unreadable file reports the project's warnings before
   failing, not instead of them.
-- A stale path the regeneration writes under another casing — the same file
-  on macOS and Windows — is no longer reported stale.
+- A path the regeneration writes under another casing — the same file on
+  macOS and Windows — is the stamp's file: not reported stale under its old
+  name, and not flagged as the project's own under its new one.
+- `UNPACK_STAMP_FOREIGN` ⚠: a stamp of another template in the target is
+  reported, left as it is and not used — it made every file of that template
+  look stale, and was then rewritten, losing its values. With `--stamp` it
+  is an error.
+- Two variables deriving the same casings (`my_app`, `my-app`) no longer
+  fail the pack with `PROJECT_REPLACES_NOT_FOUND` for the earlier one; the
+  conflict is `MANIFEST_CONFLICTING_TOKENS`, as before.
+- Only a real stamp at the project root is left out of a pack; another
+  tool's `.mold.json` was dropped by its name alone, silently.
+- A text file copied verbatim (`no_substitute`) diffs as text in
+  `unpack --diff`, not as "Binary file differs".
+- Summaries count the template's files; the stamp is mentioned apart
+  (`summary.stamp` in `--json`) rather than counted as an unchanged file.
+- `pack --vars-file` without `--diff` is refused in its own name, not
+  `--var`'s.
 
 The new checks ride existing passes where they can: finding a variable's
 value shares the substitution's scan, and every literal alternation is

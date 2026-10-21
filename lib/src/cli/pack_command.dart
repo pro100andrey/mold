@@ -15,7 +15,6 @@ import '../output/embed_source.dart';
 import '../output/output_format.dart';
 import '../prompt/variable_resolver.dart';
 import '../unbundler/unbundler.dart';
-import '../validation/validation_error.dart';
 import 'command_base.dart';
 import 'plan_report.dart';
 
@@ -114,13 +113,19 @@ class PackCommand extends MoldCommand {
       return _previewPack(sourceDir, manifest, packVars);
     }
 
-    if (packVars.vars.isNotEmpty || packVars.recorded.isNotEmpty) {
-      // Packing substitutes nothing, so a value passed here can only be for
-      // the preview. Silently dropping it would leave the user believing it
-      // took effect.
-      throw const CliException(
-        '--var only affects `pack --diff`; packing performs no '
-        'substitution. Drop it, or add --diff to preview.',
+    // Packing substitutes nothing, so a value passed here can only be for
+    // the preview. Silently dropping it would leave the user believing it
+    // took effect. Named as passed: refusing `--vars-file` in the words of
+    // `--var` named a flag the user never gave.
+    final given = [
+      if ((results['var'] as List<String>).isNotEmpty) '--var',
+      if (results['vars-file'] != null) '--vars-file',
+    ];
+    if (given.isNotEmpty) {
+      throw CliException(
+        '${given.join(' and ')} only affect${given.length == 1 ? 's' : ''} '
+        '`pack --diff`; packing performs no substitution. Drop '
+        '${given.length == 1 ? 'it' : 'them'}, or add --diff to preview.',
       );
     }
 
@@ -304,33 +309,22 @@ class PackCommand extends MoldCommand {
   ///
   /// Values come from `--var`, `--vars-file` and manifest defaults only;
   /// `pack` never prompts, so it stays usable from CI.
-  Future<int> _previewPack(
+  int _previewPack(
     String sourceDir,
     Manifest manifest,
     ({Map<String, String> vars, Map<String, String> recorded}) values,
-  ) async {
-    // Packing and planning both validate the manifest, so its warnings come
-    // twice; each is reported once. Dropping the planner's warnings instead
-    // hid the ones only an unpack raises — a value already in the template, a
-    // rename differing only in case — from the preview meant to show them.
-    final seen = <String>{};
-    void warnOnce(ValidationError w) {
-      if (seen.add('${w.code}\u0000${w.field}\u0000${w.message}')) {
-        warn(w);
-      }
-    }
-
-    final archive = await const Bundler().bundle(
-      projectDir: sourceDir,
-      manifest: manifest,
-      onWarning: warnOnce,
-    );
-    final plan = const Unbundler().plan(
-      bytes: archive,
+  ) {
+    // Planned from the files as read, not from an archive: the pack's own
+    // checks have run, so the planner starts at the variables — running the
+    // manifest phase again reported each of its warnings twice — and there
+    // is no compressing an archive only to decompress it.
+    final plan = planCollected(
+      collectBundle(projectDir: sourceDir, manifest: manifest, onWarning: warn),
+      manifest,
       vars: values.vars,
       recorded: values.recorded,
       resolver: const VariableResolver(noPrompt: true),
-      onWarning: warnOnce,
+      onWarning: warn,
     );
 
     if (wantsJson) {
