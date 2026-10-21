@@ -33,7 +33,7 @@ That puts `mold` on your `PATH`. To pin a version, or to install before the
 package is on pub.dev:
 
 ```sh
-dart install mold@^0.1.0
+dart install mold@^0.2.0
 
 # straight from git
 dart install 'mold@{git: {url: https://github.com/pro100andrey/mold}}'
@@ -115,17 +115,28 @@ mold pack <source_dir> [options]
                                               ./<name>.dart for embed formats)
   --name,     -n   Output file name stem      (also names the embedded const)
   --format,   -f   tar.gz | bytes | base64    (default: tar.gz)
+  --level          gzip level 0-9             (default: 6)
   --var,      -v   key=value                  (repeatable, for --diff)
+  --vars-file      YAML/JSON values, or a stamp (for --diff)
   --dry-run        Validate and list what would be captured, without writing
   --diff           Preview the renames this manifest would make
+  --check          Exit 1 if the output file is stale; write nothing
+  --json           Print the result as JSON on stdout
 
 mold unpack <source> [options]
   --target,   -t   Destination dir            (default: ./<source-stem>)
-  --var,      -v   key=value                  (repeatable)
+  --var,      -v   key=value                  (repeatable; overrides the file)
+  --vars-file      YAML/JSON values, or a .mold.json stamp
   --no-prompt      Use only --var + manifest defaults; never prompt
   --force          Unpack into a non-empty target (see below)
+  --stamp          Record the unpack in <target>/.mold.json
   --dry-run        Show what would be written, without writing it
   --diff           Also show a unified diff (implies --dry-run)
+  --json           Print the plan as JSON on stdout
+
+mold inspect <archive> [options]
+  --files          Also list every file, with its size
+  --json           Print the description as JSON on stdout
 ```
 
 ### Unpacking into a non-empty directory
@@ -153,8 +164,56 @@ target rather than through a scratch directory: moving a tree into an occupied
 directory is one rename per file, so it would be no more atomic, and a scratch
 directory can sit on another filesystem, where a rename is a copy.
 
-`mold help pack` / `mold help unpack` for the full option list. During
-development: `dart run mold:mold pack ./super_server`.
+`mold help <command>` for the full option list. During development:
+`dart run mold:mold pack ./super_server`.
+
+Human-facing output goes to stderr; stdout carries only `--json` documents.
+Under `--json`, warnings are part of the document, and a failure is a document
+too — `{"errors": [{"code": …, "message": …}], "warnings": […]}` with exit 1 —
+so a tool reading stdout always gets JSON.
+
+### Inspecting a template
+
+`mold inspect super_server.mold` says what a template is before you run it: its
+name and version, the variables it asks for (with defaults, patterns and
+choices), its explicit substitutions, and — with `--files` — what it holds. It
+runs the archive and manifest checks an unpack runs, so a template that
+inspects cleanly can fail an unpack only on its variables or its target.
+
+### Checking a committed archive in CI
+
+Packing is reproducible — the same tree and manifest at the same `--level`
+give the same bytes — so a committed archive or embed source can be checked
+rather than trusted:
+
+```sh
+mold pack ./templates/app -f bytes -o lib/src/template.dart --check
+```
+
+Exit 0 when the file is what packing writes now, 1 when it is stale or
+missing. Nothing is written.
+
+### Regenerating a project
+
+`--stamp` leaves a `.mold.json` in the target: the template, its version, the
+variable values and every file written. A target that already has one gets it
+updated on every later `--force`, whether or not `--stamp` is repeated.
+
+```sh
+mold unpack app.mold -t ./my_app --var name=my_app --stamp
+# …later, with a newer template:
+mold unpack app.mold -t ./my_app --force --vars-file ./my_app/.mold.json --dry-run
+```
+
+`--vars-file` takes the stamp's values, so a regeneration does not depend on
+remembering what was typed the first time. And the stamp's file list tells a
+regeneration which files the template has since **dropped**: they are listed
+under "No longer in the template", reported as `UNPACK_STALE_FILES`, and left
+in place — never deleted, since they may have been edited.
+
+`--vars-file` also takes a plain YAML or JSON map of values. `--var` applies
+over it; a key the template does not declare is `VARIABLE_UNKNOWN`, as for
+`--var`.
 
 ---
 
@@ -178,6 +237,8 @@ variables:                  # {} — declared rename variables
     description: ''         # shown when prompting
     default: null           # absent → the variable is required
     replaces: null          # the source token; absent → interpolation only
+    pattern: null           # regex the whole value must match
+    choices: []             # the only values allowed; empty → any
 
 extra_substitutions: []     # from/to, applied to CONTENT only
 path_renames: []            # from/to, applied to PATHS only
@@ -247,8 +308,30 @@ A variable **without** `replaces` contributes no renames; it exists to be
 interpolated. One that is neither used as a token nor referenced by any
 substitution warns as `MANIFEST_UNUSED_VARIABLE`.
 
-Resolution precedence: explicit `--var` › manifest `default` › interactive
-prompt. End of input is not an answer — with stdin closed, a variable with no
+A variable can constrain its value: `pattern` is a regular expression the
+**whole** value must match (it is anchored for you), and `choices` lists the
+only values allowed — the prompt shows them.
+
+```yaml
+variables:
+  org:
+    pattern: '[a-z]+(\.[a-z]+)+'
+    default: com.example
+  platform:
+    choices: [android, ios]
+    default: android
+```
+
+A value outside them is `VARIABLE_PATTERN_MISMATCH` or `VARIABLE_NOT_A_CHOICE`;
+a pattern that does not compile, or a default its own constraints reject, is
+caught at pack.
+
+Two variables whose tokens derive the same casing (`my_app` and `my-app`
+share `MyApp`) warn as `MANIFEST_CONFLICTING_TOKENS`: those sites take the
+later variable's value.
+
+Resolution precedence: explicit `--var` › `--vars-file` › manifest `default` ›
+interactive prompt. End of input is not an answer — with stdin closed, a variable with no
 default stays unresolved and is reported as `VARIABLE_MISSING`, rather than
 silently becoming an empty string.
 
@@ -397,7 +480,19 @@ extra_substitutions.
 ```
 
 When a token is too generic, the way forward is explicit `extra_substitutions`
-and `path_renames`, not a blunter rename.
+and `path_renames`, not a blunter rename. The check matches exactly as
+unpacking will — one pattern over every casing and every explicit
+substitution, longest first — so a site an `extra_substitutions` entry claims
+is not counted against the token: pinning `MyApplication` to itself removes it
+from the collateral.
+
+The same pass reports two other things worth knowing at pack:
+
+- a token that occurs in files copied verbatim (binary extensions,
+  `no_substitute`, non-UTF-8) — `PROJECT_TOKEN_IN_VERBATIM`; their paths are
+  renamed, their content keeps the token;
+- an `extra_substitutions` or `path_renames` entry that never fires —
+  `PROJECT_SUBSTITUTION_UNUSED`, `PROJECT_PATH_RENAME_UNUSED`; usually a typo.
 
 The manifest file itself is excluded from that search — a `replaces:` line is a
 declaration, not evidence the project uses the token.
@@ -504,12 +599,21 @@ stderr.
 | pack   | `MANIFEST_UNKNOWN_TRANSFORM`        | not one of the six transforms                  |
 | pack   | `MANIFEST_UNUSED_VARIABLE` ⚠        | variable does nothing                          |
 | pack   | `MANIFEST_DUPLICATE_SUBSTITUTION`   | two entries in one section share a `from`      |
+| pack   | `MANIFEST_CONFLICTING_TOKENS` ⚠     | two variables derive the same casing           |
+| pack   | `MANIFEST_INVALID_PATTERN`          | a variable's `pattern` does not compile        |
+| pack   | `MANIFEST_INVALID_DEFAULT`          | a default its own constraints reject           |
+| both   | `MANIFEST_INVALID`                  | not YAML, or not shaped like a manifest        |
+| both   | `MANIFEST_NOT_FOUND`                | no manifest file at the path                   |
 | pack   | `PROJECT_DIR_NOT_FOUND`             | source directory missing                       |
 | pack   | `PROJECT_DIR_EMPTY`                 | nothing to pack after filtering                |
 | pack   | `PROJECT_REPLACES_NOT_FOUND`        | token occurs in no captured file               |
 | pack   | `PROJECT_TOKEN_TOO_GENERIC`         | ≥30% of matches are collateral                 |
 | pack   | `PROJECT_PARTIAL_OVERLAP` ⚠         | ≥5% of matches are collateral                  |
 | pack   | `PROJECT_SYMLINK_SKIPPED` ⚠         | a symlink was left out, with the reason        |
+| pack   | `PROJECT_TOKEN_IN_VERBATIM` ⚠       | a token in files copied verbatim               |
+| pack   | `PROJECT_SUBSTITUTION_UNUSED` ⚠     | an `extra_substitutions` entry never fires     |
+| pack   | `PROJECT_PATH_RENAME_UNUSED` ⚠      | a `path_renames` entry never fires             |
+| unpack | `ARCHIVE_NOT_FOUND`                 | no archive file at the path                    |
 | unpack | `ARCHIVE_INVALID`                   | not a valid gzipped tar                        |
 | unpack | `ARCHIVE_TOO_LARGE`                 | decompresses past the size ceiling             |
 | unpack | `ARCHIVE_MISSING_MANIFEST`          | no embedded `mold.yaml`                        |
@@ -521,10 +625,17 @@ stderr.
 | unpack | `VARIABLE_MISSING`                  | required variable has no value                 |
 | unpack | `VARIABLE_INVALID_FORMAT`           | value is not a well-formed name token          |
 | unpack | `VARIABLE_UNKNOWN`                  | `--var` names a variable the template lacks    |
+| unpack | `VARIABLE_PATTERN_MISMATCH`         | value does not match the variable's `pattern`  |
+| unpack | `VARIABLE_NOT_A_CHOICE`             | value is not one of the variable's `choices`   |
 | unpack | `RENAME_COLLISION`                  | two entries would land on the same path        |
 | unpack | `TARGET_PATH_CONFLICT`              | `--force`: a path is blocked in the target     |
+| unpack | `RENAME_UNSAFE_PATH`                | a renamed path escapes the target              |
+| unpack | `UNPACK_STALE_FILES` ⚠              | files the template dropped, left in place      |
+| unpack | `UNPACK_STAMP_INVALID` ⚠            | the target's `.mold.json` is not a stamp       |
+| unpack | `UNPACK_CHMOD_FAILED` ⚠             | files written, but not made executable         |
+| unpack | `UNPACK_UNDO_INCOMPLETE` ⚠          | a failed write could not be fully undone       |
 
-⚠ = warning; does not block.
+⚠ = warning; does not block. Every code is a constant on `MoldCode`.
 
 Every warning is reported at **both** pack and unpack. A template is usually
 unpacked by someone other than its author, so a warning that only reached
@@ -556,60 +667,93 @@ import 'package:mold/mold.dart';
 final archive = await const Bundler().bundle(
   projectDir: './super_server',
   manifest: Manifest.fromFile('./super_server/mold.yaml'),
-  onWarning: (message) => print('Warning: $message'),
+  onWarning: (warning) => print('Warning: $warning'),
 );
 await File('super_server.mold').writeAsBytes(archive);
 
-// Unpack from a file…
-await const Unbundler().unbundleFile(
-  source: 'super_server.mold',
-  targetDir: './my_project',
-  vars: {'project_name': 'my_project'},
-);
-
-// …or straight from in-memory bytes (e.g. an embedded template).
-await const Unbundler().unbundleBytes(
-  source: archive,
-  targetDir: './my_project',
-  vars: {'project_name': 'my_project'},
-);
-```
-
-`onWarning` receives non-fatal problems that would otherwise be invisible — a
-skipped symlink, a token that will over-reach, a failed `chmod`.
-
-`overwrite: true` is the CLI's `--force`, on `unbundle`, `unbundleBytes`,
-`unbundleFile` and `plan`:
-
-```dart
-await const Unbundler().unbundleBytes(
-  source: archive,
-  targetDir: './my_project', // may already hold files
-  vars: {'project_name': 'my_project'},
-  overwrite: true,
-);
-```
-
-### Previewing programmatically
-
-```dart
-final plan = const Unbundler().plan(
+// Unpack from bytes (e.g. an embedded template)…
+await const Unbundler().unbundle(
   bytes: archive,
   targetDir: './my_project',
   vars: {'project_name': 'my_project'},
 );
 
-for (final file in plan.renamed) {
-  print('${file.from} -> ${file.to} (${file.replacements})');
-}
-print('${plan.totalReplacements} replacements in ${plan.files.length} files');
+// …or from a file.
+await const Unbundler().unbundleFile(
+  source: 'super_server.mold',
+  targetDir: './my_project',
+  vars: {'project_name': 'my_project'},
+);
 ```
 
-Each `PlannedFile` carries `from`, `to`, `verbatim`, `replacements`, and — for
-text files — `before` and `after`, which `UnifiedDiff` renders. With
+`onWarning` receives each non-fatal problem as a `ValidationError` — a skipped
+symlink, a token that will over-reach, a failed `chmod` — with its `code`, so
+a caller can filter or escalate by code rather than by message.
+
+Both `unbundle` options of the CLI are parameters: `overwrite: true` is
+`--force`, `stamp: true` is `--stamp`.
+
+### Errors
+
+Every problem with the inputs — the manifest, the project, the archive, the
+variables, the target — throws a `ValidationException`; its `errors` carry
+stable codes, all listed as constants on `MoldCode`. A failing filesystem
+throws an `IOException`. Nothing else is expected: a `StateError` is a bug.
+
+```dart
+try {
+  await const Unbundler().unbundle(bytes: archive, targetDir: dir);
+} on ValidationException catch (e) {
+  if (e.codes.contains(MoldCode.targetOccupied)) {
+    // ask, then retry with overwrite: true
+  }
+}
+```
+
+The async methods report through their `Future`: nothing is thrown before it
+is returned.
+
+### Plan, show, apply
+
+An unpack is two steps, and both are public. `plan` decides everything —
+validation, variables, where each file lands and the exact bytes it gets —
+and `apply` writes a plan. `unbundle` is the two in a row, so a preview and
+the write are the same computation, and a caller that shows a preview and
+asks first applies the plan it showed instead of computing it again:
+
+```dart
+const unbundler = Unbundler();
+final plan = unbundler.plan(
+  bytes: archive,
+  targetDir: './my_project',
+  vars: {'project_name': 'my_project'},
+  overwrite: true,
+);
+
+for (final file in plan.overwritten.where((f) => !f.identicalToExisting)) {
+  print(const UnifiedDiff().render(
+    before: file.existing ?? '',
+    after: file.after ?? '',
+    fromLabel: '${file.to} (current)',
+    toLabel: file.to,
+  ));
+}
+if (confirmed) {
+  await unbundler.apply(plan); // validates the target again first
+}
+```
+
+Each `PlannedFile` carries `from`, `to`, `verbatim`, `replacements`, the
+`bytes` it will be written with, `executable`, and — with `withContent` (the
+default for `plan`) — the text `before` and `after` substitution. With
 `overwrite: true` it also says whether it `overwrites` a file already in the
-target, whether that file is `identicalToExisting`, and the `existing` text;
-`plan.created` and `plan.overwritten` split the files by it.
+target, whether that file is `identicalToExisting`, and its `existing` text.
+`plan.created`, `plan.overwritten` and `plan.stale` split the files; a plan
+also carries the `manifest` and the resolved `values`. A plan made with no
+`targetDir` previews substitution only and cannot be applied.
+
+`inspect` describes an archive without unpacking it — its `manifest`, each
+file's size, which are executable.
 
 ### Prompting
 
@@ -619,16 +763,14 @@ final resolver = VariableResolver(
   prompter: VariablePrompter(stdout, stdin.readLineSync),
 );
 
-await const Unbundler().unbundleBytes(
-  source: archive,
+await const Unbundler().unbundle(
+  bytes: archive,
   targetDir: './my_project',
-  vars: const {},
   resolver: resolver,
 );
 ```
 
-Catch `ValidationException` — not `FormatException` — to handle a missing
-variable.
+A variable left without a value is `VARIABLE_MISSING`.
 
 ---
 
@@ -669,8 +811,8 @@ const List<int> kSuperServerTemplate = <int>[
 import 'package:mold/mold.dart';
 import 'template.dart';
 
-await const Unbundler().unbundleBytes(
-  source: kSuperServerTemplate,
+await const Unbundler().unbundle(
+  bytes: kSuperServerTemplate,
   targetDir: './my_project',
   vars: {'project_name': 'my_project'},
 );
@@ -697,7 +839,10 @@ final dartSource = const EmbedSource()
   and any file that is not valid UTF-8, including CRLF, NUL bytes and emoji.
 
 The archive is materialized in memory — no scratch directory is written to
-disk, and `pack` never mutates the source.
+disk, and `pack` never mutates the source. Unpacking keeps each file as a view
+into the decompressed archive, and copies only the files substitution changes.
+On a 48 MB, 1731-file corpus: pack ~0.9 s (two-thirds of it gzip; `--level`
+trades it), unpack ~0.4 s, peak memory ~250–300 MB.
 
 ## Out of scope
 
@@ -713,6 +858,6 @@ disk, and `pack` never mutates the source.
 - **Empty directories** — not represented in the archive.
 - **Compression other than gzip**, encryption, or signing.
 - **Remote template registries** or fetching over the network.
-- **Updating an already-scaffolded project** when its template moves forward.
-  `--force` regenerates over it, but replaces rather than merges: edits in the
-  files the template has are overwritten.
+- **Merging template updates into an edited project.** `--force` regenerates
+  over it and the stamp says what the template dropped, but a file the
+  template has is replaced, not merged: edits in it are overwritten.

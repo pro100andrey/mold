@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.2.0
+
+A breaking release — the library is still alpha — reshaping the API around
+how it is actually used, making unpacking about three times faster, and
+adding what regenerating a project needs.
+
+### Breaking
+
+- **An unpack is a plan, then its application.** `Unbundler.plan` builds an
+  `UnpackPlan` holding every file's destination and exact bytes;
+  `Unbundler.apply` writes one, validating the target again first. `unbundle`
+  is the two in a row, so a preview and the write are the same computation,
+  and a caller that shows a plan and asks before writing applies what it
+  showed instead of computing it twice. `PlannedFile` gains `bytes` and
+  `executable`; `UnpackPlan` gains `manifest`, `values`, `targetDir`,
+  `overwrite` and `stale`.
+- `unbundleBytes` is gone — `unbundle(bytes: …)` is the same thing — and so
+  are `BundlerBase` and `UnbundlerBase`.
+- `bundle`, `unbundle` and `unbundleFile` are truly `async`: a failure arrives
+  in the returned `Future`. They used to throw synchronously from a method
+  returning one, which `.catchError` and `expectLater` do not see.
+- `onWarning` receives a `ValidationError`, code included, instead of a
+  `String` (`WarningSink`). A failed `chmod` and an incomplete undo have codes
+  now too.
+- **One exception type for bad inputs.** Every problem with the manifest,
+  project, archive, variables or target is a `ValidationException`:
+  malformed manifest YAML is `MANIFEST_INVALID` and a missing manifest
+  `MANIFEST_NOT_FOUND` (both were `FormatException`), a missing archive
+  `ARCHIVE_NOT_FOUND`, a rename escaping the target `RENAME_UNSAFE_PATH`.
+  `ValidationException` gains `codes` and `message`. A failing filesystem is
+  an `IOException`; a `StateError` is a bug.
+- **A smaller public API.** `package:mold` exports `Bundler`, `Unbundler`,
+  the plan, the manifest model, the resolver and prompter, `EmbedSource`,
+  `UnifiedDiff`, the validation types, and `MoldCode` — every code as a
+  constant. Validators, scanners, archive helpers, case conversion and the
+  CLI classes are internal.
+
+### Faster, leaner
+
+Measured on `packages/flutter` (1731 files, 48 MB): unpack 1.2 s → 0.38 s,
+plan 1.1 s → 0.3 s, pack 1.33 s → 0.89 s, peak memory 546 → ~250–300 MB.
+
+- Reading an archive copied every file into a boxed `List<int>` — eight bytes
+  per byte, most of an unpack. Files are now views into the tar.
+- Validating and reading an archive decode it once, not twice.
+- The pack-time token check ran `indexOf` once per casing over every file; it
+  now uses the substitutor's own pattern, over the bytes the packer already
+  read rather than a second read of each file.
+- Planning substitutes and counts in one pass, and a file substitution leaves
+  alone keeps the archive's buffer rather than a re-encoded copy.
+- gzip is most of what remains of a pack: `--level` / `compressionLevel`
+  trades it for size, and the archive stays reproducible at any one level.
+
+### Sharper checks
+
+- The too-generic error recommends `extra_substitutions`, but the check
+  ignored them, so following its advice changed nothing. The check now
+  matches exactly as unpacking will — explicit substitutions included — so a
+  site one claims is not counted against the token. `no_substitute` files no
+  longer count as matches either.
+- `PROJECT_TOKEN_IN_VERBATIM` ⚠: a token in files copied verbatim, which keep
+  it.
+- `PROJECT_SUBSTITUTION_UNUSED` / `PROJECT_PATH_RENAME_UNUSED` ⚠: an entry that
+  never fires — usually a typo.
+- `MANIFEST_CONFLICTING_TOKENS` ⚠: two variables deriving the same casing,
+  whose sites silently go to the later one.
+- The analyzer runs with `strict-casts`, `strict-inference` and
+  `strict-raw-types`.
+
+### New
+
+- **Variable constraints.** `pattern:` (a regex the whole value must match)
+  and `choices:` (the only values allowed, shown by the prompt), enforced as
+  `VARIABLE_PATTERN_MISMATCH` / `VARIABLE_NOT_A_CHOICE`; a pattern that does
+  not compile or a default they reject is caught at pack.
+- **`mold inspect <archive>`** (`Unbundler.inspect`): the manifest, variables,
+  substitutions and — with `--files` — the files, without unpacking.
+- **`mold pack … --check`**: exit 1 when the committed archive or embed source
+  is not what packing writes now. For CI; writes nothing.
+- **`--stamp`** leaves `.mold.json` in the target — template, version, values
+  and files — kept up to date by every later `--force`. A regeneration then
+  reports the files the template has dropped (`UNPACK_STALE_FILES`, left in
+  place), and…
+- **`--vars-file`** feeds values from a YAML/JSON map or a stamp, with `--var`
+  applied over it.
+- **`--json`** on every command: the result on stdout, warnings inside it, and
+  a failure as `{"errors": […]}` with exit 1.
+
 ## 0.1.4
 
 - **`mold unpack --force`** unpacks into a directory that already holds files —
