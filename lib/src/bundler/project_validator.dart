@@ -76,9 +76,15 @@ class ProjectInput {
 ///
 /// Overlap is measured as a **proportion**, not a yes/no. Substitution is
 /// literal, so a token that is mostly a substring of other words corrupts the
-/// project — measured at 95% collateral for `bin` and 84% for `app` on real
-/// corpora, against 14% for a self-named project whose own filenames
-/// legitimately extend it. A boolean cannot separate those; a ratio can.
+/// project — on a fresh `flutter create` project (Flutter 3.47), 75%
+/// collateral for `bin`, 73% for `test` and 65% for `app`, against under 5%
+/// for `runner` and for the project's own name. A boolean cannot separate
+/// those; a ratio can.
+///
+/// Those numbers are from the casing-aware boundary rule in [_Needle]. Before
+/// it, `_` counted as part of the word, which put `app` at 83%, `test` at 95%
+/// and `runner` at 26% on the same project — and a self-named project whose
+/// files extend its name with `_` (`app_template_test`) at 14% on a real one.
 class ProjectValidator extends ValidatorBase<ProjectInput> {
   const ProjectValidator();
 
@@ -224,10 +230,8 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       return stats;
     }
 
-    const converter = CaseConverter();
     final casings = {
-      for (final token in tokens.values)
-        token: converter.replacements(token, token).keys.toSet(),
+      for (final token in tokens.values) token: _Needle.casingsOf(token),
     };
     final classifier = FileClassifier(
       extraBinary: manifest.binaryExtensions.toSet(),
@@ -253,8 +257,8 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
 
       for (final entry in casings.entries) {
         final target = stats[entry.key]!;
-        for (final casing in entry.value) {
-          _count(chunk, casing, target);
+        for (final needle in entry.value) {
+          _count(chunk, needle, target);
         }
       }
     }
@@ -268,11 +272,18 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
 
   /// Tallies every occurrence of [needle] in [hay] into [into], recording the
   /// enclosing identifier whenever the match is part of a longer word.
-  void _count(String hay, String needle, _TokenStats into) {
-    for (var i = hay.indexOf(needle); i != -1; i = hay.indexOf(needle, i + 1)) {
-      final end = i + needle.length;
-      final before = i > 0 && _word.hasMatch(hay[i - 1]);
-      final after = end < hay.length && _word.hasMatch(hay[end]);
+  ///
+  /// What counts as "part of a longer word" is the needle's own casing — see
+  /// [_Needle]. Treating every `\w` as a continuation made `_` one,
+  /// so `app_template_test` counted as over-reach for `replaces: app_template`
+  /// although rewriting it to `my_app_test` is exactly the point.
+  void _count(String hay, _Needle needle, _TokenStats into) {
+    final text = needle.text;
+    for (var i = hay.indexOf(text); i != -1; i = hay.indexOf(text, i + 1)) {
+      final end = i + text.length;
+      final before = i > 0 && needle.continuesBefore(hay.codeUnitAt(i - 1));
+      final after =
+          end < hay.length && needle.continuesAfter(hay.codeUnitAt(end));
       if (!before && !after) {
         into.record();
         continue;
@@ -292,4 +303,65 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       into.record(enclosing: hay.substring(start, stop));
     }
   }
+}
+
+/// One derived casing of a `replaces` token, and the rule for which adjacent
+/// characters extend it into a longer word.
+///
+/// The rule follows the casing, because each casing has its own word
+/// boundaries:
+///
+/// - **snake, kebab, SCREAMING** — joined by a separator, so a letter or digit
+///   continues the word and anything else (`_`, `-`, `.`, `/`, …) ends it.
+///   `_` ends a kebab needle too: both are segment separators, and a mixed
+///   form like `my-app_test` (file names, generated identifiers) holds the
+///   kebab token as a whole segment, which is what the rename should reach.
+/// - **Pascal** — joined by capitals, so after the needle only a lowercase
+///   letter continues it (`AppTemplateer`); a capital starts the next word
+///   (`AppTemplateTest`). Before it, nothing does: the needle opens on a
+///   capital, which is itself a word start in any camel or Pascal identifier
+///   (`MyAppTemplate`, `HTTPAppTemplate`, `_AppTemplate`). A digit after a
+///   needle that ends in a digit continues the number.
+///
+/// Real over-reach is still caught: `my_app` in `my_appendix`, `app` in
+/// `application`, `MyApp` in `MyApplication`.
+class _Needle {
+  const _Needle(this.text, {required this.pascal});
+
+  /// The casings of [token] substitution would rewrite, each with its rule.
+  ///
+  /// Claimed in `CaseConverter.replacements` order, so when two casings
+  /// coincide (`app` is both snake and kebab) the needle keeps the rule of
+  /// the casing the substitutor itself would credit with it.
+  static List<_Needle> casingsOf(String token) {
+    const converter = CaseConverter();
+    final pascal = converter.toPascal(token);
+    final keys = converter.replacements(token, token).keys;
+
+    return [for (final key in keys) _Needle(key, pascal: key == pascal)];
+  }
+
+  /// The literal searched for.
+  final String text;
+
+  /// Whether [text] is the PascalCase form.
+  final bool pascal;
+
+  /// Whether the character [unit] just before a match extends it.
+  bool continuesBefore(int unit) => !pascal && _isAlnum(unit);
+
+  /// Whether the character [unit] just after a match extends it.
+  bool continuesAfter(int unit) {
+    if (!pascal) {
+      return _isAlnum(unit);
+    }
+
+    return _isLower(unit) ||
+        (_isDigit(unit) && _isDigit(text.codeUnitAt(text.length - 1)));
+  }
+
+  static bool _isAlnum(int u) => _isLower(u) || _isUpper(u) || _isDigit(u);
+  static bool _isLower(int u) => u >= 0x61 && u <= 0x7A;
+  static bool _isUpper(int u) => u >= 0x41 && u <= 0x5A;
+  static bool _isDigit(int u) => u >= 0x30 && u <= 0x39;
 }
