@@ -6,11 +6,14 @@ import 'package:path/path.dart' as p;
 import '../manifest/content_policy.dart';
 import '../manifest/manifest.dart';
 import '../unbundler/case_converter.dart';
+import '../unbundler/case_transform.dart';
+import '../unbundler/casing_needle.dart';
 import '../unbundler/substitutor.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
 import 'file_scanner.dart';
+import 'shipping_checks.dart';
 
 /// How often a token's casings matched, and how much of that was collateral —
 /// a match sitting inside a longer identifier.
@@ -24,6 +27,10 @@ class _TokenStats {
   /// Packed files copied verbatim that hold one of the casings, in scan
   /// order. Not counted in [matches]: substitution never reaches them.
   final List<String> verbatimFiles = [];
+
+  /// Spellings of the token no derived casing matches (`appTemplate`,
+  /// `App Template`) → the files holding them, once per occurrence.
+  final Map<String, List<String>> uncovered = {};
 
   /// Total occurrences of any derived casing.
   int get matches => _matches;
@@ -101,10 +108,11 @@ class ProjectInput {
 /// for `runner` and for the project's own name. A boolean cannot separate
 /// those; a ratio can.
 ///
-/// Those numbers are from the casing-aware boundary rule in [_Needle]. Before
-/// it, `_` counted as part of the word, which put `app` at 83%, `test` at 95%
-/// and `runner` at 26% on the same project — and a self-named project whose
-/// files extend its name with `_` (`app_template_test`) at 14% on a real one.
+/// Those numbers are from the casing-aware boundary rule in [CasingNeedle].
+/// Before it, `_` counted as part of the word, which put `app` at 83%, `test`
+/// at 95% and `runner` at 26% on the same project — and a self-named project
+/// whose files extend its name with `_` (`app_template_test`) at 14% on a
+/// real one.
 class ProjectValidator extends ValidatorBase<ProjectInput> {
   const ProjectValidator();
 
@@ -117,6 +125,9 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   static const tokenInVerbatim = 'PROJECT_TOKEN_IN_VERBATIM';
   static const substitutionUnused = 'PROJECT_SUBSTITUTION_UNUSED';
   static const pathRenameUnused = 'PROJECT_PATH_RENAME_UNUSED';
+  static const uncoveredCasing = 'PROJECT_UNCOVERED_CASING';
+  static const secretSuspected = 'PROJECT_SECRET_SUSPECTED';
+  static const pathNotPortable = 'PROJECT_PATH_NOT_PORTABLE';
 
   /// At or above this share of collateral matches, packing is refused.
   static const _errorRatio = 0.30;
@@ -177,12 +188,14 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       ]);
     }
 
+    issues.addAll(_portability(relPaths));
+
     final tokens = <String, String>{
       for (final variable in input.manifest.variables)
         if (variable.replaces case final t? when t.isNotEmpty) variable.name: t,
     };
     final search = _Search(input.manifest, tokens.values);
-    _scanCorpus(input, relPaths, search);
+    _scanCorpus(input, relPaths, search, issues);
 
     for (final entry in tokens.entries) {
       final name = entry.key;
@@ -201,6 +214,10 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
             field: name,
           ),
         );
+      }
+
+      if (s.uncovered.isNotEmpty) {
+        issues.add(_uncoveredWarning(name, token, s.uncovered));
       }
 
       if (s.matches == 0) {
@@ -268,6 +285,53 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
     return ValidationResult(issues);
   }
 
+  /// The warning for spellings of [token] substitution will not reach, with
+  /// the `extra_substitutions` entries that would.
+  ///
+  /// An entry is suggested only where a transform reproduces the spelling
+  /// exactly from the token, so pasting it renames that site the way the
+  /// template meant; a spelling no transform produces (`apptemplate`) is
+  /// named without a guess.
+  static ValidationError _uncoveredWarning(
+    String name,
+    String token,
+    Map<String, List<String>> uncovered,
+  ) {
+    final spellings = uncovered.entries.toList()
+      ..sort((a, b) => b.value.length.compareTo(a.value.length));
+    final listed = [
+      for (final MapEntry(key: spelling, value: files) in spellings)
+        "'$spelling' (${files.length}: ${_sample(files.toSet().toList())})",
+    ].join(', ');
+
+    final entries = <String>[];
+    final unmatched = <String>[];
+    for (final MapEntry(key: spelling) in spellings) {
+      final transform = CaseTransform.values
+          .where((t) => t.apply(token) == spelling)
+          .firstOrNull;
+      if (transform == null) {
+        unmatched.add("'$spelling'");
+      } else {
+        entries.add(
+          '  - from: "$spelling"\n'
+          '    to: "{{ $name | ${transform.name} }}"',
+        );
+      }
+    }
+
+    return ValidationError.warning(
+      uncoveredCasing,
+      "Variable '$name': $listed spell token '$token' in a way no derived "
+      'casing matches, so unpacking leaves them as they are.'
+      '${entries.isEmpty ? '' : ' To rename them too, add to '
+                'extra_substitutions:\n${entries.join('\n')}'}'
+      '${unmatched.isEmpty ? '' : '\nNo transform produces '
+                '${unmatched.join(', ')}; give each a literal entry.'}',
+      field: name,
+    );
+  }
+
   /// The first few of [paths], for a message.
   static String _sample(List<String> paths, [int limit = 3]) {
     final shown = paths.take(limit).join(', ');
@@ -289,10 +353,23 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   ///
   /// The manifest file itself is skipped: its `replaces:` line is a
   /// declaration, not evidence that the project uses the token.
-  void _scanCorpus(ProjectInput input, List<String> relPaths, _Search search) {
-    if (search.isEmpty) {
-      return;
-    }
+  ///
+  /// The same pass looks for secrets, by name and in text — the one read of
+  /// every file this validator makes.
+  void _scanCorpus(
+    ProjectInput input,
+    List<String> relPaths,
+    _Search search,
+    List<ValidationError> issues,
+  ) {
+    void secret(String rel, String what) => issues.add(
+      ValidationError.warning(
+        secretSuspected,
+        "'$rel' looks like $what. A template is shared, so it would ship "
+        'with it — exclude it, unless it is a placeholder.',
+        field: rel,
+      ),
+    );
 
     final policy = ContentPolicy(input.manifest);
     final manifestRel = _manifestRel(input);
@@ -302,6 +379,10 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       }
 
       search.paths(rel);
+      final byName = secretByName(rel);
+      if (byName != null) {
+        secret(rel, byName);
+      }
       if (policy.isVerbatimPath(rel)) {
         search.verbatim(rel, () => _read(input, rel));
         continue;
@@ -314,11 +395,35 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       final text = policy.decode(rel, bytes);
       if (text == null) {
         search.verbatim(rel, () => bytes);
-      } else {
-        search.content(text);
+        continue;
+      }
+      search.content(rel, text);
+      if (byName == null) {
+        if (secretInContent(text) case final what?) {
+          secret(rel, 'it holds $what');
+        }
       }
     }
   }
+
+  /// Paths that cannot all exist on every platform the template may be
+  /// unpacked on.
+  static List<ValidationError> _portability(List<String> relPaths) => [
+    for (final group in caseCollisions(relPaths))
+      ValidationError.warning(
+        pathNotPortable,
+        '${group.join(', ')} differ only in case; on macOS and Windows they '
+        'are one file, and unpacking there keeps only the last.',
+        field: group.first,
+      ),
+    for (final rel in relPaths)
+      if (windowsProblem(rel) case final problem?)
+        ValidationError.warning(
+          pathNotPortable,
+          "'$rel' cannot be created on Windows: $problem.",
+          field: rel,
+        ),
+  ];
 
   /// The manifest's own path relative to the project, when it lies inside it.
   ///
@@ -366,9 +471,121 @@ class _RuleUse {
 class _Site {
   _Site({this.needle, this.stats});
 
-  _Needle? needle;
+  CasingNeedle? needle;
   _TokenStats? stats;
   _RuleUse? rule;
+}
+
+/// Finds spellings of a token that no derived casing matches.
+///
+/// The four casings are not every way a name gets written. Flutter's own
+/// template spells the project name in camelCase in the iOS and macOS bundle
+/// identifier (`com.example.appTemplate`) and in Title Case in the macOS
+/// product name — sites a rename silently misses, leaving the scaffolded app
+/// shipping under its template's identity.
+///
+/// Matched case-insensitively with any one of ` ._-` or nothing between the
+/// words, then every spelling that is a derived casing — or that an explicit
+/// substitution already claims — is discarded. What is left is reported.
+/// Single-word tokens are skipped: with no words to join, the only spellings
+/// left are mixed-case oddities.
+class _Variants {
+  factory _Variants(Map<String, _TokenStats> stats, Set<String> covered) {
+    const converter = CaseConverter();
+    final byKey = <String, _TokenStats>{};
+    final parts = <String>[];
+    for (final MapEntry(key: token, value: s) in stats.entries) {
+      final words = converter.splitWords(token);
+      if (words.length < 2) {
+        continue;
+      }
+      byKey.putIfAbsent(words.join(), () => s);
+      parts.add(words.map(RegExp.escape).join('[ ._-]?'));
+    }
+
+    final firsts = [
+      for (final token in stats.keys)
+        if (converter.splitWords(token) case [final first, _, ...])
+          for (final c in [first[0], first[0].toUpperCase()]) c,
+    ];
+
+    return _Variants._(
+      parts.isEmpty
+          ? null
+          : RegExp(
+              '${Substitutor.firstCharGuard(firsts)}'
+              '(?:${parts.map((p) => '(?:$p)').join('|')})',
+              caseSensitive: false,
+            ),
+      byKey,
+      covered,
+    );
+  }
+
+  _Variants._(this._pattern, this._byKey, this._covered);
+
+  final RegExp? _pattern;
+
+  /// Words joined, lowercase → the token they spell.
+  final Map<String, _TokenStats> _byKey;
+
+  /// Every derived casing; a match spelled like one is not a variant.
+  final Set<String> _covered;
+
+  static final _separators = RegExp('[ ._-]');
+
+  /// Records the variants in [hay] — the file [rel], or its path — outside
+  /// the [claimed] spans.
+  void scan(String hay, String rel, List<int> claimed) {
+    final pattern = _pattern;
+    if (pattern == null) {
+      return;
+    }
+    for (final m in pattern.allMatches(hay)) {
+      final text = m[0]!;
+      if (_covered.contains(text) ||
+          _within(claimed, m.start, m.end) ||
+          !_whole(hay, m.start, m.end)) {
+        continue;
+      }
+      final s = _byKey[text.toLowerCase().replaceAll(_separators, '')];
+      if (s != null) {
+        (s.uncovered[text] ??= []).add(rel);
+      }
+    }
+  }
+
+  static bool _within(List<int> spans, int start, int end) {
+    for (var i = 0; i < spans.length; i += 2) {
+      if (start >= spans[i] && end <= spans[i + 1]) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// Whether the match stands as a word: a letter or digit before it
+  /// continues it only when the match opens lowercase (`myapptemplate`), one
+  /// after it only when it is lowercase or a digit — a capital starts the
+  /// next camel word (`appTemplateTests`).
+  static bool _whole(String hay, int start, int end) {
+    if (start > 0 &&
+        CasingNeedle.isAlnum(hay.codeUnitAt(start - 1)) &&
+        _isLower(hay.codeUnitAt(start))) {
+      return false;
+    }
+    if (end < hay.length) {
+      final next = hay.codeUnitAt(end);
+      if (_isLower(next) || (next >= 0x30 && next <= 0x39)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  static bool _isLower(int u) => u >= 0x61 && u <= 0x7A;
 }
 
 /// The token check's matcher: every literal substitution would act on, in
@@ -385,11 +602,11 @@ class _Site {
 class _Search {
   factory _Search(Manifest manifest, Iterable<String> tokens) {
     final stats = <String, _TokenStats>{};
-    final needles = <String, (_Needle, _TokenStats)>{};
+    final needles = <String, (CasingNeedle, _TokenStats)>{};
     for (final token in tokens) {
       final s = stats.putIfAbsent(token, _TokenStats.new);
       // A later variable wins a shared casing, as in the substitution table.
-      for (final needle in _Needle.casingsOf(token)) {
+      for (final needle in CasingNeedle.casingsOf(token)) {
         needles[needle.text] = (needle, s);
       }
     }
@@ -424,6 +641,7 @@ class _Search {
       contentPattern: Substitutor.alternation(contentSites.keys),
       pathPattern: Substitutor.alternation(pathSites.keys),
       needlePattern: Substitutor.alternation(needles.keys),
+      variants: _Variants(stats, needles.keys.toSet()),
       needleStats: {
         for (final MapEntry(key: text, value: (_, s)) in needles.entries)
           text: s,
@@ -441,10 +659,13 @@ class _Search {
     required this._pathPattern,
     required this._needlePattern,
     required this._needleStats,
+    required this._variants,
   });
 
   /// Per `replaces` token.
   final Map<String, _TokenStats> stats;
+
+  final _Variants _variants;
 
   /// Per `extra_substitutions.from`.
   final Map<String, _RuleUse> contentRules;
@@ -463,10 +684,16 @@ class _Search {
   bool get isEmpty => _contentPattern == null && _pathPattern == null;
 
   /// Counts the matches in the packed path [rel].
-  void paths(String rel) => _tally(rel, _pathPattern, _pathSites);
+  void paths(String rel) {
+    final claimed = _tally(rel, _pathPattern, _pathSites);
+    _variants.scan(rel, rel, claimed);
+  }
 
   /// Counts the matches in the substituted text [text].
-  void content(String text) => _tally(text, _contentPattern, _contentSites);
+  void content(String rel, String text) {
+    final claimed = _tally(text, _contentPattern, _contentSites);
+    _variants.scan(text, rel, claimed);
+  }
 
   /// Notes which tokens the verbatim file [rel] holds.
   ///
@@ -493,39 +720,49 @@ class _Search {
     }
   }
 
-  static void _tally(String hay, RegExp? pattern, Map<String, _Site> sites) {
+  /// Counts the matches of [pattern] in [hay]; returns the spans explicit
+  /// substitutions claim, as start, end pairs.
+  static List<int> _tally(
+    String hay,
+    RegExp? pattern,
+    Map<String, _Site> sites,
+  ) {
     if (pattern == null) {
-      return;
+      return const [];
     }
+    final claimed = <int>[];
     for (final m in pattern.allMatches(hay)) {
       final site = sites[m[0]!]!;
-      site.rule?.hits++;
+      if (site.rule case final rule?) {
+        rule.hits++;
+        claimed
+          ..add(m.start)
+          ..add(m.end);
+      }
       final needle = site.needle;
       if (needle != null) {
         _record(hay, m.start, m.end, needle, site.stats!);
       }
     }
+
+    return claimed;
   }
 
   /// Records one match of [needle] at [start]..[end] in [hay], with the
   /// enclosing identifier when the match is part of a longer word.
   ///
   /// What counts as "part of a longer word" is the needle's own casing — see
-  /// [_Needle]. Treating every `\w` as a continuation made `_` one, so
+  /// [CasingNeedle]. Treating every `\w` as a continuation made `_` one, so
   /// `app_template_test` counted as over-reach for `replaces: app_template`
   /// although rewriting it to `my_app_test` is exactly the point.
   static void _record(
     String hay,
     int start,
     int end,
-    _Needle needle,
+    CasingNeedle needle,
     _TokenStats into,
   ) {
-    final before =
-        start > 0 && needle.continuesBefore(hay.codeUnitAt(start - 1));
-    final after =
-        end < hay.length && needle.continuesAfter(hay.codeUnitAt(end));
-    if (!before && !after) {
+    if (needle.isWholeAt(hay, start)) {
       into.record();
       return;
     }
@@ -544,66 +781,5 @@ class _Search {
   }
 
   /// `\w`, on a code unit.
-  static bool _isWord(int u) => _Needle._isAlnum(u) || u == 0x5F;
-}
-
-/// One derived casing of a `replaces` token, and the rule for which adjacent
-/// characters extend it into a longer word.
-///
-/// The rule follows the casing, because each casing has its own word
-/// boundaries:
-///
-/// - **snake, kebab, SCREAMING** — joined by a separator, so a letter or digit
-///   continues the word and anything else (`_`, `-`, `.`, `/`, …) ends it.
-///   `_` ends a kebab needle too: both are segment separators, and a mixed
-///   form like `my-app_test` (file names, generated identifiers) holds the
-///   kebab token as a whole segment, which is what the rename should reach.
-/// - **Pascal** — joined by capitals, so after the needle only a lowercase
-///   letter continues it (`AppTemplateer`); a capital starts the next word
-///   (`AppTemplateTest`). Before it, nothing does: the needle opens on a
-///   capital, which is itself a word start in any camel or Pascal identifier
-///   (`MyAppTemplate`, `HTTPAppTemplate`, `_AppTemplate`). A digit after a
-///   needle that ends in a digit continues the number.
-///
-/// Real over-reach is still caught: `my_app` in `my_appendix`, `app` in
-/// `application`, `MyApp` in `MyApplication`.
-class _Needle {
-  const _Needle(this.text, {required this.pascal});
-
-  /// The casings of [token] substitution would rewrite, each with its rule.
-  ///
-  /// Claimed in `CaseConverter.replacements` order, so when two casings
-  /// coincide (`app` is both snake and kebab) the needle keeps the rule of
-  /// the casing the substitutor itself would credit with it.
-  static List<_Needle> casingsOf(String token) {
-    const converter = CaseConverter();
-    final pascal = converter.toPascal(token);
-    final keys = converter.replacements(token, token).keys;
-
-    return [for (final key in keys) _Needle(key, pascal: key == pascal)];
-  }
-
-  /// The literal searched for.
-  final String text;
-
-  /// Whether [text] is the PascalCase form.
-  final bool pascal;
-
-  /// Whether the character [unit] just before a match extends it.
-  bool continuesBefore(int unit) => !pascal && _isAlnum(unit);
-
-  /// Whether the character [unit] just after a match extends it.
-  bool continuesAfter(int unit) {
-    if (!pascal) {
-      return _isAlnum(unit);
-    }
-
-    return _isLower(unit) ||
-        (_isDigit(unit) && _isDigit(text.codeUnitAt(text.length - 1)));
-  }
-
-  static bool _isAlnum(int u) => _isLower(u) || _isUpper(u) || _isDigit(u);
-  static bool _isLower(int u) => u >= 0x61 && u <= 0x7A;
-  static bool _isUpper(int u) => u >= 0x41 && u <= 0x5A;
-  static bool _isDigit(int u) => u >= 0x30 && u <= 0x39;
+  static bool _isWord(int u) => CasingNeedle.isAlnum(u) || u == 0x5F;
 }

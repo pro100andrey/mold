@@ -16,6 +16,7 @@ import '../util/bytes.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import 'case_converter.dart';
+import 'casing_needle.dart';
 import 'rename_validator.dart';
 import 'substitutor.dart';
 import 'target_validator.dart';
@@ -53,6 +54,9 @@ class Unbundler {
 
   /// A `.mold.json` in the target that is not a readable stamp.
   static const stampInvalid = 'UNPACK_STAMP_INVALID';
+
+  /// Overwrites that discard edits made since the stamped unpack.
+  static const overwritesEdits = 'UNPACK_OVERWRITES_EDITS';
 
   /// Unpacks the archive [bytes] into [targetDir]: [plan], then [apply].
   ///
@@ -219,6 +223,7 @@ class Unbundler {
     File? existing(String to) =>
         inspect == null ? null : File(p.join(inspect, to));
 
+    final presence = _Presence(manifest, resolved, rules);
     final files = [
       for (final MapEntry(key: from, value: content) in archive.files.entries)
         _planOne(
@@ -229,15 +234,34 @@ class Unbundler {
           executable: archive.executable.contains(from),
           withContent: withContent,
           existing: existing(renames[from]!),
+          stamped: previous?.files[renames[from]],
+          presence: presence,
         ),
     ];
+    if (onWarning != null) {
+      presence.warnings().forEach(onWarning);
+    }
     final written = {for (final f in files) f.to};
+    final edited = [
+      for (final f in files)
+        if (f.editedSinceStamp) f.to,
+    ];
+    if (edited.isNotEmpty) {
+      onWarning?.call(
+        ValidationError.warning(
+          overwritesEdits,
+          '${edited.length} file(s) were edited since the last unpack, and '
+          'this one overwrites them: ${edited.join(', ')}',
+        ),
+      );
+    }
     if (writeStamp) {
+      final sorted = [...files]..sort((a, b) => a.to.compareTo(b.to));
       final record = UnpackStamp(
         template: manifest.name,
         version: manifest.version,
         vars: resolved,
-        files: written.toList()..sort(),
+        files: {for (final f in sorted) f.to: UnpackStamp.digest(f.bytes)},
       );
       files.add(
         _planGenerated(
@@ -256,7 +280,7 @@ class Unbundler {
       targetDir: targetDir,
       overwrite: overwrite,
       stale: [
-        for (final path in previous?.files ?? const <String>[])
+        for (final path in previous?.files.keys ?? const <String>[])
           if (!written.contains(path) &&
               File(p.join(inspect!, path)).existsSync())
             path,
@@ -354,13 +378,16 @@ class Unbundler {
     required bool executable,
     required bool withContent,
     required File? existing,
+    required String? stamped,
+    required _Presence presence,
   }) {
     final before = rules.decode(from, content);
+    presence.scanPath(from);
     var replacements = 0;
     String? after;
     var bytes = content;
     if (before != null) {
-      (after, replacements) = rules.substitute(before);
+      (after, replacements) = presence.substitute(from, before);
       // Re-encoded only when something changed: decoding and re-encoding an
       // untouched file reproduces its bytes, so the archive's own buffer is
       // already the answer, with no copy.
@@ -373,6 +400,8 @@ class Unbundler {
         ? existing.readAsBytesSync()
         : null;
 
+    final identical = onDisk != null && sameBytes(onDisk, bytes);
+
     return PlannedFile(
       from: from,
       to: to,
@@ -383,8 +412,13 @@ class Unbundler {
       before: withContent ? before : null,
       after: withContent ? after : null,
       overwrites: onDisk != null,
-      identicalToExisting: onDisk != null && sameBytes(onDisk, bytes),
+      identicalToExisting: identical,
       existing: withContent && onDisk != null ? _tryDecode(onDisk) : null,
+      editedSinceStamp:
+          stamped != null &&
+          onDisk != null &&
+          !identical &&
+          UnpackStamp.digest(onDisk) != stamped,
     );
   }
 
@@ -632,6 +666,123 @@ class _Undo {
   }
 }
 
+/// Finds where a variable's **value** already occurs in the template.
+///
+/// Unpacking `super_server` as `my_app` into a template that already has a
+/// `MyApp` class gives two classes called `MyApp`: the renamed one and the one
+/// that was there. Paths that converge are a `RENAME_COLLISION`; this is the
+/// same loss in content, where nothing else would notice — the two sites are
+/// spelled alike from then on and cannot be told apart.
+///
+/// Searched in the content substitution's own scan (see `Watching`), so an
+/// occurrence a substitution consumes — the value inside a longer token — is
+/// not reported, and finding them costs no second pass; a match must also be
+/// a whole word by the casing's rule.
+class _Presence {
+  factory _Presence(
+    Manifest manifest,
+    Map<String, String> resolved,
+    _Rules rules,
+  ) {
+    const converter = CaseConverter();
+    final paths = rules.pathSubstitutor.keys.toSet();
+    final needles = <String, (CasingNeedle, String, String)>{};
+    for (final variable in manifest.variables) {
+      final replaces = variable.replaces;
+      final value = resolved[variable.name];
+      if (replaces == null || value == null) {
+        continue;
+      }
+      // Value casing → the token casing that becomes it.
+      final becomes = {
+        for (final MapEntry(:key, :value)
+            in converter.replacements(replaces, value).entries)
+          value: key,
+      };
+      for (final needle in CasingNeedle.casingsOf(value)) {
+        final from = becomes[needle.text];
+        if (from == null || from == needle.text) {
+          continue; // An identity rename makes nothing ambiguous.
+        }
+        needles.putIfAbsent(needle.text, () => (needle, variable.name, from));
+      }
+    }
+
+    return _Presence._(
+      needles,
+      rules.contentSubstitutor.watching(needles.keys),
+      Substitutor.alternation({...paths, ...needles.keys}),
+    );
+  }
+
+  _Presence._(this._needles, this._content, this._pathPattern);
+
+  /// Value casing → its rule, its variable, and the token casing that turns
+  /// into it.
+  final Map<String, (CasingNeedle, String, String)> _needles;
+
+  /// The content substitution, watching for the value casings — so finding
+  /// them rides on the substitution's own scan instead of a second one.
+  final Watching _content;
+  final RegExp? _pathPattern;
+
+  /// Value casing → the files holding it, once per occurrence.
+  final Map<String, List<String>> _found = {};
+
+  /// Searches the archive path [from].
+  ///
+  /// Paths are short, so a separate pass costs nothing worth sharing.
+  void scanPath(String from) {
+    final pattern = _pathPattern;
+    if (_needles.isEmpty || pattern == null) {
+      return;
+    }
+    for (final m in pattern.allMatches(from)) {
+      _hit(from, m[0]!, m.start, from);
+    }
+  }
+
+  /// Substitutes [text], the content of [file], noting the value casings it
+  /// meets.
+  (String, int) substitute(String file, String text) =>
+      _content.applyCounted(text, (found, start) {
+        _hit(text, found, start, file);
+      });
+
+  void _hit(String hay, String found, int start, String file) {
+    final needle = _needles[found];
+    if (needle != null && needle.$1.isWholeAt(hay, start)) {
+      (_found[found] ??= []).add(file);
+    }
+  }
+
+  /// One warning per variable whose value was found.
+  List<ValidationError> warnings() {
+    final byVariable = <String, List<String>>{};
+    for (final MapEntry(key: spelling, value: files) in _found.entries) {
+      final (_, variable, from) = _needles[spelling]!;
+      final unique = files.toSet().toList();
+      final shown = unique.take(3).join(', ');
+      final more = unique.length > 3 ? ' and ${unique.length - 3} more' : '';
+      (byVariable[variable] ??= []).add(
+        "'$spelling' ${files.length} time(s), in $shown$more — where '$from' "
+        'also becomes it',
+      );
+    }
+
+    return [
+      for (final MapEntry(key: variable, value: sites) in byVariable.entries)
+        ValidationError.warning(
+          VariablesValidator.valuePresent,
+          "Variable '$variable': its value already occurs in the template: "
+          '${sites.join('; ')}. After unpacking, those sites and the renamed '
+          'ones are spelled alike and can no longer be told apart.',
+          field: variable,
+        ),
+    ];
+  }
+}
+
 /// The substitution rules for one unpack, derived once from the manifest and
 /// the resolved variables.
 ///
@@ -693,10 +844,6 @@ class _Rules {
 
   /// The decoded text of [bytes], or null when the entry is copied verbatim.
   String? decode(String key, List<int> bytes) => policy.decode(key, bytes);
-
-  /// Applies the content substitutions to [text], counting them.
-  (String, int) substitute(String text) =>
-      contentSubstitutor.applyCounted(text);
 
   /// Encodes [text] back to bytes, restoring a BOM that [original] carried.
   ///

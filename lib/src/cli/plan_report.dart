@@ -107,6 +107,9 @@ void printPlan(
     section('Created', [for (final f in plan.created) f.to]);
     section('Overwritten', [for (final f in replacing) f.to]);
   }
+  section('Edited since the last unpack — overwriting discards the edits', [
+    for (final f in plan.edited) f.to,
+  ]);
   section('No longer in the template (left in place)', plan.stale);
 
   if (!showDiff) {
@@ -163,6 +166,7 @@ Map<String, Object?> planJson(
           'overwrites': f.overwrites,
           'identicalToExisting': f.identicalToExisting,
           'generated': f.generated,
+          'editedSinceStamp': f.editedSinceStamp,
           if (showDiff) 'diff': diffOf(f),
         },
     ],

@@ -244,7 +244,11 @@ extra_substitutions:
       expect(stamp.template, 'super_server');
       expect(stamp.version, '1.2.0');
       expect(stamp.vars, {'name': 'my_app', 'platform': 'android'});
-      expect(stamp.files, ['lib/my_app.dart', 'mold.yaml', 'pubspec.yaml']);
+      expect(stamp.files.keys, [
+        'lib/my_app.dart',
+        'mold.yaml',
+        'pubspec.yaml',
+      ]);
     });
 
     test('feeds a regeneration through --vars-file', () async {
@@ -301,7 +305,7 @@ variables:
         reason: 'stale files are reported, never deleted',
       );
       expect(readStamp().version, '1.3.0', reason: 'kept up to date');
-      expect(readStamp().files, isNot(contains('lib/my_app.dart')));
+      expect(readStamp().files.keys, isNot(contains('lib/my_app.dart')));
     });
 
     test('a template file named like the stamp collides', () async {
@@ -417,7 +421,7 @@ variables:
         template: 't',
         version: '1',
         vars: {'a': 'b'},
-        files: ['x', 'y/z'],
+        files: {'x': 'h1', 'y/z': 'h2'},
       );
       final back = UnpackStamp.tryParse(stamp.toJson())!;
 

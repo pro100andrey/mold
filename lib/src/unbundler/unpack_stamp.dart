@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
+
 /// The record an unpack can leave in its target: which template, which
 /// variable values, and which files it wrote.
 ///
@@ -11,7 +13,10 @@ import 'dart:convert';
 ///   does not depend on remembering what was typed the first time;
 /// - its [files] say what the previous unpack owned, so a regeneration can
 ///   report the files the template has since dropped — left in place, never
-///   deleted, since they may have been edited.
+///   deleted, since they may have been edited;
+/// - and what each held, so a regeneration can tell which of the files it is
+///   about to overwrite were edited since — the one loss `--force` would
+///   otherwise inflict without a word.
 class UnpackStamp {
   const UnpackStamp({
     required this.template,
@@ -40,7 +45,7 @@ class UnpackStamp {
     final template = doc['template'];
     final version = doc['version'];
     if (vars is! Map<String, Object?> ||
-        files is! List<Object?> ||
+        files is! Map<String, Object?> ||
         template is! String ||
         version is! String) {
       return null;
@@ -50,7 +55,7 @@ class UnpackStamp {
       template: template,
       version: version,
       vars: {for (final e in vars.entries) e.key: '${e.value}'},
-      files: [for (final f in files) '$f'],
+      files: {for (final e in files.entries) e.key: '${e.value}'},
     );
   }
 
@@ -70,8 +75,14 @@ class UnpackStamp {
   final Map<String, String> vars;
 
   /// Every path the unpack wrote, relative to the target, sorted — the stamp
-  /// itself excluded.
-  final List<String> files;
+  /// itself excluded — with the [digest] of the bytes it wrote there.
+  final Map<String, String> files;
+
+  /// The digest a stamp records for [bytes]: SHA-256, in hex.
+  ///
+  /// Cryptographic not for security — nothing here is adversarial — but
+  /// because a change detector that can miss a change is not one.
+  static String digest(List<int> bytes) => sha256.convert(bytes).toString();
 
   /// The stamp as `.mold.json` holds it: indented and with a trailing newline,
   /// so it diffs well when committed.

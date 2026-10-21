@@ -206,10 +206,15 @@ mold unpack app.mold -t ./my_app --force --vars-file ./my_app/.mold.json --dry-r
 ```
 
 `--vars-file` takes the stamp's values, so a regeneration does not depend on
-remembering what was typed the first time. And the stamp's file list tells a
-regeneration which files the template has since **dropped**: they are listed
-under "No longer in the template", reported as `UNPACK_STALE_FILES`, and left
-in place — never deleted, since they may have been edited.
+remembering what was typed the first time. The stamp also records a SHA-256 of
+every file it wrote, which tells a regeneration two things:
+
+- which files it is about to overwrite were **edited** since —
+  `UNPACK_OVERWRITES_EDITS`, listed under "Edited since the last unpack" in a
+  dry run, so `--force` no longer discards work without a word;
+- which files the template has since **dropped** — listed under "No longer in
+  the template", reported as `UNPACK_STALE_FILES`, and left in place: never
+  deleted, since they may have been edited.
 
 `--vars-file` also takes a plain YAML or JSON map of values. `--var` applies
 over it; a key the template does not declare is `VARIABLE_UNKNOWN`, as for
@@ -248,8 +253,10 @@ no_substitute: []           # globs; content untouched, path still renamed
 binary_extensions: []       # extra extensions treated as binary
 ```
 
-Unknown keys are ignored silently, so check spelling — `excludes:` is not
-`exclude:`.
+A key the format does not define is ignored, but never silently: it warns as
+`MANIFEST_UNKNOWN_KEY`, with the key it probably means — `excludes` → did you
+mean `exclude`? — at the top level, inside a variable, and inside a
+substitution entry.
 
 ### File selection
 
@@ -486,13 +493,48 @@ substitution, longest first — so a site an `extra_substitutions` entry claims
 is not counted against the token: pinning `MyApplication` to itself removes it
 from the collateral.
 
-The same pass reports two other things worth knowing at pack:
+The four casings are not every way a name gets written, and the check says
+so. A token's words matched case-insensitively, joined by one of ` ._-` or by
+nothing, that land on no derived casing are reported as
+`PROJECT_UNCOVERED_CASING` — with the `extra_substitutions` entries that would
+rename them, wherever a transform reproduces the spelling exactly. On a fresh
+`flutter create` project named `app_template`:
+
+```text
+[PROJECT_UNCOVERED_CASING] Variable 'name': 'appTemplate' (10:
+ios/Runner.xcodeproj/project.pbxproj, macos/Runner.xcodeproj/project.pbxproj,
+macos/Runner/Configs/AppInfo.xcconfig), 'App Template' (1: ios/Runner/Info.plist)
+spell token 'app_template' in a way no derived casing matches, so unpacking
+leaves them as they are. To rename them too, add to extra_substitutions:
+  - from: "appTemplate"
+    to: "{{ name | camelCase }}"
+  - from: "App Template"
+    to: "{{ name | titleCase }}"
+```
+
+That is the iOS and macOS bundle identifier and the display name: without it,
+the scaffolded app ships under the template's identity.
+
+The same pass reports other things worth knowing at pack:
 
 - a token that occurs in files copied verbatim (binary extensions,
   `no_substitute`, non-UTF-8) — `PROJECT_TOKEN_IN_VERBATIM`; their paths are
   renamed, their content keeps the token;
 - an `extra_substitutions` or `path_renames` entry that never fires —
-  `PROJECT_SUBSTITUTION_UNUSED`, `PROJECT_PATH_RENAME_UNUSED`; usually a typo.
+  `PROJECT_SUBSTITUTION_UNUSED`, `PROJECT_PATH_RENAME_UNUSED`; usually a typo;
+- a file that looks like a secret — `PROJECT_SECRET_SUSPECTED`: by name
+  (`.env`, `key.properties`, `google-services.json`, `*.pem`, `*.jks`, SSH
+  keys, …; `.env.example` and friends excepted) or by content (a PEM private
+  key, an AWS access key id, a Google API key, a GitHub token). A template is
+  made to be shared;
+- a path that cannot exist everywhere — `PROJECT_PATH_NOT_PORTABLE`: two that
+  differ only in case (one file on macOS and Windows), or a name Windows
+  refuses (`aux.txt`, `a:b`, a trailing dot).
+
+At unpack, a variable's **value** is checked against the template:
+`VARIABLE_VALUE_PRESENT` when a casing of it already occurs there as a word.
+Unpacking `super_server` as `my_app` into a template with a `MyApp` class
+leaves two classes called `MyApp`, and nothing else would notice.
 
 The manifest file itself is excluded from that search — a `replaces:` line is a
 declaration, not evidence the project uses the token.
@@ -602,6 +644,7 @@ stderr.
 | pack   | `MANIFEST_CONFLICTING_TOKENS` ⚠     | two variables derive the same casing           |
 | pack   | `MANIFEST_INVALID_PATTERN`          | a variable's `pattern` does not compile        |
 | pack   | `MANIFEST_INVALID_DEFAULT`          | a default its own constraints reject           |
+| pack   | `MANIFEST_UNKNOWN_KEY` ⚠            | a key the format does not define               |
 | both   | `MANIFEST_INVALID`                  | not YAML, or not shaped like a manifest        |
 | both   | `MANIFEST_NOT_FOUND`                | no manifest file at the path                   |
 | pack   | `PROJECT_DIR_NOT_FOUND`             | source directory missing                       |
@@ -613,6 +656,9 @@ stderr.
 | pack   | `PROJECT_TOKEN_IN_VERBATIM` ⚠       | a token in files copied verbatim               |
 | pack   | `PROJECT_SUBSTITUTION_UNUSED` ⚠     | an `extra_substitutions` entry never fires     |
 | pack   | `PROJECT_PATH_RENAME_UNUSED` ⚠      | a `path_renames` entry never fires             |
+| pack   | `PROJECT_UNCOVERED_CASING` ⚠        | a spelling of a token no casing matches        |
+| pack   | `PROJECT_SECRET_SUSPECTED` ⚠        | a file that looks like a secret                |
+| pack   | `PROJECT_PATH_NOT_PORTABLE` ⚠       | a path not every platform can create           |
 | unpack | `ARCHIVE_NOT_FOUND`                 | no archive file at the path                    |
 | unpack | `ARCHIVE_INVALID`                   | not a valid gzipped tar                        |
 | unpack | `ARCHIVE_TOO_LARGE`                 | decompresses past the size ceiling             |
@@ -627,11 +673,14 @@ stderr.
 | unpack | `VARIABLE_UNKNOWN`                  | `--var` names a variable the template lacks    |
 | unpack | `VARIABLE_PATTERN_MISMATCH`         | value does not match the variable's `pattern`  |
 | unpack | `VARIABLE_NOT_A_CHOICE`             | value is not one of the variable's `choices`   |
+| unpack | `VARIABLE_VALUE_PRESENT` ⚠          | the value already occurs in the template       |
 | unpack | `RENAME_COLLISION`                  | two entries would land on the same path        |
 | unpack | `TARGET_PATH_CONFLICT`              | `--force`: a path is blocked in the target     |
 | unpack | `RENAME_UNSAFE_PATH`                | a renamed path escapes the target              |
+| unpack | `RENAME_CASE_COLLISION` ⚠           | renamed paths differ only in case              |
 | unpack | `UNPACK_STALE_FILES` ⚠              | files the template dropped, left in place      |
 | unpack | `UNPACK_STAMP_INVALID` ⚠            | the target's `.mold.json` is not a stamp       |
+| unpack | `UNPACK_OVERWRITES_EDITS` ⚠         | overwriting files edited since the stamp       |
 | unpack | `UNPACK_CHMOD_FAILED` ⚠             | files written, but not made executable         |
 | unpack | `UNPACK_UNDO_INCOMPLETE` ⚠          | a failed write could not be fully undone       |
 
@@ -841,7 +890,7 @@ final dartSource = const EmbedSource()
 The archive is materialized in memory — no scratch directory is written to
 disk, and `pack` never mutates the source. Unpacking keeps each file as a view
 into the decompressed archive, and copies only the files substitution changes.
-On a 48 MB, 1731-file corpus: pack ~0.9 s (two-thirds of it gzip; `--level`
+On a 48 MB, 1731-file corpus: pack ~1.1 s (over half of it gzip; `--level`
 trades it), unpack ~0.4 s, peak memory ~250–300 MB.
 
 ## Out of scope

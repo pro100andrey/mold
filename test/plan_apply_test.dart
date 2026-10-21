@@ -229,5 +229,53 @@ variables:
 
       expect(s.applyCounted(input), (s.apply(input), s.count(input)));
     });
+
+    test('watching rewrites exactly as the plain substitutor does', () {
+      // `app_store` is watched and longer than the key `app` at the same
+      // position: the key must still win there.
+      final s = Substitutor({'app': 'app_store', 'my_app': 'x'});
+      final watched = s.watching(['app_store', 'store', 'appx']);
+      const inputs = [
+        'app_store',
+        'my_app app_store store appx',
+        'nothing',
+        'storeapp_storeapp',
+        '',
+      ];
+
+      for (final input in inputs) {
+        final seen = <(String, int)>[];
+        final result = watched.applyCounted(
+          input,
+          (t, at) => seen.add((t, at)),
+        );
+
+        expect(result, s.applyCounted(input), reason: input);
+        for (final (text, at) in seen) {
+          expect(input.substring(at, at + text.length), text);
+        }
+      }
+    });
+
+    test('keys opening on class metacharacters still match', () {
+      final s = Substitutor({']x': '1', '-y': '2', '^z': '3', r'\w': '4'});
+
+      expect(s.apply(r'a]x b-y c^z d\w'), 'a1 b2 c3 d4');
+    });
+
+    test('a watched literal a key covers is not reported', () {
+      final s = Substitutor({'app': 'app_store'});
+      final seen = <String>[];
+      s
+          .watching(['app_store', 'store'])
+          .applyCounted(
+            'app_store store',
+            (t, _) => seen.add(t),
+          );
+
+      // The first `app_store` starts with the key `app`, so it is rewritten,
+      // not met; its `store` and the lone `store` are met.
+      expect(seen, ['store', 'store']);
+    });
   });
 }

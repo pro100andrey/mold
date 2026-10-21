@@ -39,8 +39,9 @@ adding what regenerating a project needs.
 
 ### Faster, leaner
 
-Measured on `packages/flutter` (1731 files, 48 MB): unpack 1.2 s → 0.38 s,
-plan 1.1 s → 0.3 s, pack 1.33 s → 0.89 s, peak memory 546 → ~250–300 MB.
+Measured on `packages/flutter` (1731 files, 48 MB): unpack 1.2 s → 0.39 s,
+plan 1.1 s → 0.33 s, pack 1.33 s → 1.09 s (with the new checks below),
+peak memory 546 → ~250–300 MB.
 
 - Reading an archive copied every file into a boxed `List<int>` — eight bytes
   per byte, most of an unpack. Files are now views into the tar.
@@ -66,8 +67,27 @@ plan 1.1 s → 0.3 s, pack 1.33 s → 0.89 s, peak memory 546 → ~250–300 MB.
   never fires — usually a typo.
 - `MANIFEST_CONFLICTING_TOKENS` ⚠: two variables deriving the same casing,
   whose sites silently go to the later one.
-- The analyzer runs with `strict-casts`, `strict-inference` and
-  `strict-raw-types`.
+- `PROJECT_UNCOVERED_CASING` ⚠: spellings of a token no derived casing
+  matches — on a fresh Flutter project, the camelCase iOS/macOS bundle id
+  `com.example.appTemplate` and the Title Case display name, which a rename
+  silently missed. The warning carries the `extra_substitutions` entries
+  that fix it.
+- `MANIFEST_UNKNOWN_KEY` ⚠: a key the format does not define, with the key it
+  probably means. Unknown keys used to be ignored silently.
+- `VARIABLE_VALUE_PRESENT` ⚠: the value already occurs in the template, so
+  the renamed sites and the existing ones become indistinguishable.
+- `PROJECT_SECRET_SUSPECTED` ⚠ (by name and content) and
+  `PROJECT_PATH_NOT_PORTABLE` ⚠ (case-only pairs, names Windows refuses);
+  `RENAME_CASE_COLLISION` ⚠ for case-only pairs renaming creates.
+- The stamp records a SHA-256 per file, and a regeneration flags overwrites
+  that discard edits made since (`UNPACK_OVERWRITES_EDITS`,
+  `PlannedFile.editedSinceStamp`, `UnpackPlan.edited`).
+
+The new checks ride existing passes where they can: finding a variable's
+value shares the substitution's scan, and every literal alternation is
+guarded by a first-character lookahead, which roughly halves its scan. Plan
+and unpack cost what they did before the checks; the pack-time check costs
+about 130 ms more on the corpus above.
 
 ### New
 

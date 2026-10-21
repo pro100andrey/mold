@@ -17,6 +17,7 @@ class PlannedFile {
     this.identicalToExisting = false,
     this.existing,
     this.generated = false,
+    this.editedSinceStamp = false,
   });
 
   /// The entry's path inside the archive, before renaming. For a [generated]
@@ -65,6 +66,13 @@ class PlannedFile {
   /// Whether the file is written by mold rather than taken from the archive —
   /// the unpack stamp.
   final bool generated;
+
+  /// Whether the file in the target was edited since the unpack recorded in
+  /// the target's stamp — so overwriting it discards those edits.
+  ///
+  /// False when there is no stamp, the stamp does not list the file, or the
+  /// overwrite would change nothing.
+  final bool editedSinceStamp;
 
   /// Whether the path itself changes.
   bool get renamed => from != to;
@@ -124,6 +132,9 @@ class UnpackPlan {
 
   /// Files whose path is free in the target.
   Iterable<PlannedFile> get created => files.where((f) => !f.overwrites);
+
+  /// Overwrites that discard edits made since the last stamped unpack.
+  Iterable<PlannedFile> get edited => files.where((f) => f.editedSinceStamp);
 
   /// Files that replace one already in the target.
   Iterable<PlannedFile> get overwritten => files.where((f) => f.overwrites);

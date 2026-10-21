@@ -34,13 +34,23 @@ class ManifestValidator extends ValidatorBase<Manifest> {
   static const conflictingTokens = 'MANIFEST_CONFLICTING_TOKENS';
   static const invalidPattern = 'MANIFEST_INVALID_PATTERN';
   static const invalidDefault = 'MANIFEST_INVALID_DEFAULT';
+  static const unknownKey = 'MANIFEST_UNKNOWN_KEY';
 
   @override
   String get phase => 'manifest';
 
   @override
   ValidationResult validate(Manifest input) {
-    final issues = <ValidationError>[];
+    final issues = <ValidationError>[
+      for (final MapEntry(key: path, value: guess) in input.unknownKeys.entries)
+        ValidationError.warning(
+          unknownKey,
+          "Unknown manifest key '$path'"
+          "${guess == null ? '.' : " — did you mean '$guess'?"}"
+          ' It is ignored.',
+          field: path,
+        ),
+    ];
 
     if (input.name.isEmpty) {
       issues.add(

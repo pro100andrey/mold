@@ -77,6 +77,9 @@ abstract final class MoldCode {
   /// A variable's `default` fails its own `pattern` or `choices`.
   static const String manifestInvalidDefault = ManifestValidator.invalidDefault;
 
+  /// ⚠ A key the manifest format does not define — usually a misspelling.
+  static const String manifestUnknownKey = ManifestValidator.unknownKey;
+
   // ─── project (pack) ───────────────────────────────────────────────────────
 
   /// The source directory is missing.
@@ -108,6 +111,15 @@ abstract final class MoldCode {
   /// ⚠ A `path_renames.from` occurs in no packed path.
   static const String projectPathRenameUnused =
       ProjectValidator.pathRenameUnused;
+
+  /// ⚠ A spelling of a token no derived casing matches (`appTemplate`).
+  static const String projectUncoveredCasing = ProjectValidator.uncoveredCasing;
+
+  /// ⚠ A file that looks like a secret, by name or content.
+  static const String projectSecretSuspected = ProjectValidator.secretSuspected;
+
+  /// ⚠ A path that cannot exist on every platform.
+  static const String projectPathNotPortable = ProjectValidator.pathNotPortable;
 
   // ─── archive (unpack) ─────────────────────────────────────────────────────
 
@@ -162,6 +174,9 @@ abstract final class MoldCode {
   /// A value is not one of the variable's `choices`.
   static const String variableNotAChoice = VariablesValidator.notAChoice;
 
+  /// ⚠ A variable's value already occurs in the template.
+  static const String variableValuePresent = VariablesValidator.valuePresent;
+
   // ─── rename (unpack) ──────────────────────────────────────────────────────
 
   /// Two entries would land on the same path.
@@ -169,6 +184,9 @@ abstract final class MoldCode {
 
   /// A renamed path escapes the target directory.
   static const String renameUnsafePath = RenameValidator.unsafePath;
+
+  /// ⚠ Two destinations differ only in case.
+  static const String renameCaseCollision = RenameValidator.caseCollision;
 
   // ─── write (unpack) ───────────────────────────────────────────────────────
 
@@ -184,4 +202,7 @@ abstract final class MoldCode {
 
   /// ⚠ The target's `.mold.json` is not a mold stamp.
   static const String unpackStampInvalid = Unbundler.stampInvalid;
+
+  /// ⚠ An overwrite discards edits made since the stamped unpack.
+  static const String unpackOverwritesEdits = Unbundler.overwritesEdits;
 }

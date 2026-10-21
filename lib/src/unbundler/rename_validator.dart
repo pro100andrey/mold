@@ -1,4 +1,5 @@
 import '../archive/archive_path.dart';
+import '../bundler/shipping_checks.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
@@ -22,6 +23,7 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
 
   static const collision = 'RENAME_COLLISION';
   static const unsafePath = 'RENAME_UNSAFE_PATH';
+  static const caseCollision = 'RENAME_CASE_COLLISION';
 
   @override
   String get phase => 'rename';
@@ -60,8 +62,22 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
         collided.add(to);
       }
     }
+    // Destinations equal but for case are one file on macOS and Windows.
+    // A warning, not an error: on a case-sensitive filesystem both survive,
+    // and pack already warned if the template itself held such a pair —
+    // this catches the ones renaming creates.
+    final caseIssues = [
+      for (final group in caseCollisions(input.values.toSet()))
+        if (!group.any(collided.contains))
+          ValidationError.warning(
+            caseCollision,
+            '${group.join(', ')} differ only in case after renaming; on a '
+            'case-insensitive filesystem only the last survives.',
+            field: group.first,
+          ),
+    ];
     if (collided.isEmpty) {
-      return .ok();
+      return ValidationResult(caseIssues);
     }
 
     // Insertion-ordered, so the message lists the sources in archive order and
@@ -74,6 +90,7 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
     });
 
     return ValidationResult([
+      ...caseIssues,
       for (final entry in sources.entries)
         ValidationError(
           collision,

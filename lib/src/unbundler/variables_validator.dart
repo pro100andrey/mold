@@ -38,6 +38,10 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
   static const patternMismatch = 'VARIABLE_PATTERN_MISMATCH';
   static const notAChoice = 'VARIABLE_NOT_A_CHOICE';
 
+  /// Raised while planning, not by [validate]: finding it needs the
+  /// template's content.
+  static const valuePresent = 'VARIABLE_VALUE_PRESENT';
+
   /// A value used for a `replaces` token must read like an identifier: start
   /// with a letter, then letters/digits/space/underscore/hyphen.
   static final _nameFormat = RegExp(r'^[A-Za-z][A-Za-z0-9 _-]*$');

@@ -152,6 +152,7 @@ class Manifest {
     this.useGitignore = true,
     this.source,
     this.path,
+    this.unknownKeys = const {},
   });
 
   /// Parses a manifest from raw YAML [text]. [source] defaults to [text] so the
@@ -183,6 +184,9 @@ class Manifest {
       throw const FormatException('Manifest must be a YAML mapping.');
     }
 
+    final unknown = <String, String?>{};
+    _collectUnknown(doc, unknown);
+
     return Manifest(
       name: _optionalString(doc['name']),
       version: _optionalString(doc['version']),
@@ -199,6 +203,7 @@ class Manifest {
       useGitignore: _bool(doc['use_gitignore'], 'use_gitignore', true),
       source: text,
       path: path,
+      unknownKeys: unknown,
     );
   }
 
@@ -215,6 +220,101 @@ class Manifest {
     }
 
     return .fromYaml(file.readAsStringSync(), path: path);
+  }
+
+  /// The keys a manifest may hold, at its top level.
+  static const topLevelKeys = [
+    'name',
+    'version',
+    'include',
+    'exclude',
+    'use_gitignore',
+    'variables',
+    'extra_substitutions',
+    'path_renames',
+    'no_substitute',
+    'binary_extensions',
+  ];
+
+  /// The keys a variable's mapping may hold.
+  static const variableKeys = [
+    'description',
+    'default',
+    'replaces',
+    'pattern',
+    'choices',
+  ];
+
+  /// The keys an `extra_substitutions` / `path_renames` entry may hold.
+  static const substitutionKeys = ['from', 'to'];
+
+  /// Records every key of [doc] the format does not define, with the known
+  /// key it is probably a misspelling of.
+  ///
+  /// Shape errors are left to the parsers, which report them with context;
+  /// this only looks where the shape is already right.
+  static void _collectUnknown(YamlMap doc, Map<String, String?> into) {
+    void check(YamlMap map, List<String> known, String prefix) {
+      for (final key in map.keys) {
+        final name = '$key';
+        if (!known.contains(name)) {
+          into['$prefix$name'] = _closest(name, known);
+        }
+      }
+    }
+
+    check(doc, topLevelKeys, '');
+    if (doc['variables'] case final YamlMap variables) {
+      for (final MapEntry(:key, :value) in variables.entries) {
+        if (value is YamlMap) {
+          check(value, variableKeys, 'variables.$key.');
+        }
+      }
+    }
+    for (final section in ['extra_substitutions', 'path_renames']) {
+      if (doc[section] case final YamlList entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i] case final YamlMap entry) {
+            check(entry, substitutionKeys, '$section[$i].');
+          }
+        }
+      }
+    }
+  }
+
+  /// The entry of [known] within two edits of [key], if there is one —
+  /// `excludes` → `exclude`, `replace` → `replaces`.
+  static String? _closest(String key, List<String> known) {
+    String? best;
+    var bestDistance = 3;
+    for (final candidate in known) {
+      final d = _distance(key, candidate);
+      if (d < bestDistance) {
+        best = candidate;
+        bestDistance = d;
+      }
+    }
+
+    return best;
+  }
+
+  /// Levenshtein distance; keys are short, so the plain table is plenty.
+  static int _distance(String a, String b) {
+    var previous = List<int>.generate(b.length + 1, (j) => j);
+    for (var i = 1; i <= a.length; i++) {
+      final current = List<int>.filled(b.length + 1, 0)..[0] = i;
+      for (var j = 1; j <= b.length; j++) {
+        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+        current[j] = [
+          previous[j] + 1,
+          current[j - 1] + 1,
+          previous[j - 1] + cost,
+        ].reduce((x, y) => x < y ? x : y);
+      }
+      previous = current;
+    }
+
+    return previous[b.length];
   }
 
   /// Template name; also the default output file stem.
@@ -278,6 +378,16 @@ class Manifest {
   /// exclude the manifest from its own token search: a `replaces:` line is not
   /// evidence that the project uses the token.
   final String? path;
+
+  /// Keys in the parsed YAML that the format does not define, by where they
+  /// sit (`excludes`, `variables.name.replace`, `path_renames[0].form`), each
+  /// with the known key it is probably a misspelling of, or null.
+  ///
+  /// Provenance like [path]: not a manifest field, not part of equality.
+  /// Parsing stays lenient — an unknown key is reported, not rejected — but it
+  /// is never silent: `excludes:` for `exclude:` would otherwise pack exactly
+  /// the files it was written to keep out.
+  final Map<String, String?> unknownKeys;
 
   /// Every glob pattern this manifest declares, in one place.
   ///
