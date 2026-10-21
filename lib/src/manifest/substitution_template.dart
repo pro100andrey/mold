@@ -152,7 +152,7 @@ class SubstitutionTemplate {
 
   /// Renders against [values].
   ///
-  /// Throws [FormatException] for a variable absent from [values]. Unreachable
+  /// Throws [StateError] for a variable absent from [values]. Unreachable
   /// through the normal path: `ManifestValidator` rejects unknown names and
   /// `VariablesValidator` rejects missing values before this runs.
   String render(Map<String, String> values) {
@@ -164,7 +164,7 @@ class SubstitutionTemplate {
         case PlaceholderSegment(:final variable, :final transform):
           final value = values[variable];
           if (value == null) {
-            throw FormatException(
+            throw StateError(
               "No value for variable '$variable' in a substitution.",
             );
           }

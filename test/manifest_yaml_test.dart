@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Asserts [key] is absent as a top-level YAML key.
 ///
@@ -129,8 +130,8 @@ void main() {
       expect(embedded.variables, hasLength(1));
       expect(embedded.variables.first.replaces, 'super_server');
 
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
         vars: const {'project_name': 'my_project'},
       );
@@ -216,10 +217,16 @@ void main() {
       expect(parsed.source, isNotNull);
     });
 
-    test('fromFile on a missing path is a FormatException', () {
+    test('fromFile on a missing path is MANIFEST_NOT_FOUND', () {
       expect(
         () => Manifest.fromFile('/nonexistent/mold.yaml'),
-        throwsA(isA<FormatException>()),
+        throwsA(
+          isA<ValidationException>().having(
+            (e) => e.codes,
+            'codes',
+            [MoldCode.manifestNotFound],
+          ),
+        ),
       );
     });
   });

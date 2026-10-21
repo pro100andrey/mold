@@ -14,6 +14,7 @@ import '../prompt/variable_prompter.dart';
 import '../prompt/variable_resolver.dart';
 import '../unbundler/unbundler.dart';
 import '../unbundler/unpack_plan.dart';
+import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 
 /// Thrown for user-facing CLI errors (bad args, missing files). The runner
@@ -109,6 +110,8 @@ class PackCommand extends Command<int> {
 
   final StringSink _err;
 
+  void _warn(ValidationError warning) => _err.writeln('Warning: $warning');
+
   @override
   String get name => 'pack';
 
@@ -155,7 +158,7 @@ class PackCommand extends Command<int> {
       final archive = await const Bundler().bundle(
         projectDir: sourceDir,
         manifest: manifest,
-        onWarning: (message) => _err.writeln('Warning: $message'),
+        onWarning: _warn,
       );
       // One stem drives both the file name and the generated const identifier;
       // rendering from manifest.name here would make `-n foo` write foo.dart
@@ -241,7 +244,7 @@ class PackCommand extends Command<int> {
     final archive = await const Bundler().bundle(
       projectDir: sourceDir,
       manifest: manifest,
-      onWarning: (message) => _err.writeln('Warning: $message'),
+      onWarning: _warn,
     );
     // No onWarning here, deliberately: `bundle` above already ran the manifest
     // phase and reported it. Passing one would print every manifest warning
@@ -326,6 +329,8 @@ class UnpackCommand extends Command<int> {
 
   final StringSink _err;
 
+  void _warn(ValidationError warning) => _err.writeln('Warning: $warning');
+
   @override
   String get name => 'unpack';
 
@@ -361,19 +366,14 @@ class UnpackCommand extends Command<int> {
       // --diff implies --dry-run: there is no such thing as diffing a write
       // that already happened, so the combination cannot be invalid.
       if (showDiff || results['dry-run'] as bool) {
-        final file = File(source);
-        if (!file.existsSync()) {
-          throw FormatException('Archive not found: $source');
-        }
-
         _printPlan(
           _err,
           const Unbundler().plan(
-            bytes: file.readAsBytesSync(),
+            bytes: Unbundler.readArchive(source),
             targetDir: targetDir,
             vars: vars,
             resolver: resolver,
-            onWarning: (message) => _err.writeln('Warning: $message'),
+            onWarning: _warn,
             // A summary needs counts, not content.
             withContent: showDiff,
             overwrite: overwrite,
@@ -390,7 +390,7 @@ class UnpackCommand extends Command<int> {
         targetDir: targetDir,
         vars: vars,
         resolver: resolver,
-        onWarning: (message) => _err.writeln('Warning: $message'),
+        onWarning: _warn,
         overwrite: overwrite,
       );
       _err.writeln('Unpacked into $targetDir.');

@@ -5,15 +5,29 @@ import 'package:path/path.dart' as p;
 import '../archive/archive_writer.dart';
 import '../manifest/manifest.dart';
 import '../manifest/manifest_validator.dart';
+import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import 'project_validator.dart';
 
-/// The public packing contract: scan a project and return the archive bytes.
+/// Packs a source project into a template archive.
 ///
-/// The result is always the gzipped-tar archive; choosing a `bytes` / `base64`
-/// embed source is an output-emission concern handled separately.
-abstract class BundlerBase {
+/// The source directory is read but never mutated. Files are captured
+/// **verbatim** — no substitution happens at pack time, so one archive can be
+/// unpacked under many names.
+///
+/// Problems with the inputs — the manifest, the project — throw a
+/// [ValidationException] carrying stable codes; a failing filesystem throws an
+/// [IOException].
+class Bundler {
+  const Bundler({this.compressionLevel = ArchiveWriter.defaultLevel});
+
+  /// The gzip level, 0 (store) to 9 (smallest). See [ArchiveWriter].
+  final int compressionLevel;
+
   /// Packs [projectDir] per [manifest] and returns the archive bytes.
+  ///
+  /// The result is always the gzipped-tar archive; choosing a `bytes` /
+  /// `base64` embed source is an output-emission concern handled separately.
   ///
   /// [onWarning] receives non-fatal problems that would otherwise be silent,
   /// such as a symlink left out of the archive or a `replaces` token that will
@@ -21,35 +35,12 @@ abstract class BundlerBase {
   Future<List<int>> bundle({
     required String projectDir,
     required Manifest manifest,
-    void Function(String message)? onWarning,
-  });
-}
-
-/// Packs a source project into a template archive.
-///
-/// The source directory is read but never mutated. Files are captured
-/// **verbatim** — no substitution happens at pack time, so one archive can be
-/// unpacked under many names.
-class Bundler implements BundlerBase {
-  const Bundler();
-
-  @override
-  Future<List<int>> bundle({
-    required String projectDir,
-    required Manifest manifest,
-    void Function(String message)? onWarning,
+    WarningSink? onWarning,
   }) async {
-    // Warnings are reported BEFORE throwIfInvalid, not after. ProjectValidator
-    // deliberately builds its skipped-symlink warnings ahead of the empty-dir
-    // error because they are the explanation for it; reporting after the throw
-    // would drop exactly the case they exist for.
-    void report(ValidationResult result) {
-      for (final warning in result.warnings) {
-        onWarning?.call(warning.toString());
-      }
-
-      result.throwIfInvalid();
-    }
+    // Warnings are reported before the throw, not after: ProjectValidator
+    // builds its skipped-symlink warnings ahead of the empty-dir error because
+    // they are the explanation for it. See ValidationResult.report.
+    void report(ValidationResult result) => result.report(onWarning);
 
     // Phase order: manifest → project. The first failing phase aborts.
     report(const ManifestValidator().validate(manifest));
@@ -62,9 +53,21 @@ class Bundler implements BundlerBase {
     final scanned = Directory(projectDir).existsSync()
         ? ProjectValidator.scanFor(projectDir, manifest)
         : null;
+    // Read before validating, and handed over with the scan: the validator
+    // searches every file's content, and reading each one a second time to
+    // pack it held the corpus in memory twice.
+    final files = <String, List<int>>{
+      for (final rel in scanned?.files ?? const <String>[])
+        rel: File(p.join(projectDir, rel)).readAsBytesSync(),
+    };
     report(
       const ProjectValidator().validate(
-        ProjectInput(dir: projectDir, manifest: manifest, scan: scanned),
+        ProjectInput(
+          dir: projectDir,
+          manifest: manifest,
+          scan: scanned,
+          contents: files,
+        ),
       ),
     );
 
@@ -74,16 +77,15 @@ class Bundler implements BundlerBase {
     // check above and the validator's own, where `!` would raise a TypeError
     // no layer catches.
     final scan = scanned ?? ProjectValidator.scanFor(projectDir, manifest);
-    final files = <String, List<int>>{};
     for (final rel in scan.files) {
-      files[rel] = File(p.join(projectDir, rel)).readAsBytesSync();
+      files[rel] ??= File(p.join(projectDir, rel)).readAsBytesSync();
     }
 
     // A manifest read from a file embeds byte-for-byte; one built in code is
     // rendered by the Manifest itself, which knows all of its fields.
     final manifestYaml = manifest.source ?? manifest.toYaml();
 
-    return const ArchiveWriter().write(
+    return ArchiveWriter(compressionLevel: compressionLevel).write(
       manifestYaml: manifestYaml,
       files: files,
       executable: scan.executable,

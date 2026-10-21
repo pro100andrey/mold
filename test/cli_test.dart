@@ -1,8 +1,9 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('mold pack/unpack CLI', () {

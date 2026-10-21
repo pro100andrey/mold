@@ -29,6 +29,10 @@ class VariablePrompter {
       _out.writeln(variable.description);
     }
 
+    if (variable.choices.isNotEmpty) {
+      _out.writeln('One of: ${variable.choices.join(', ')}');
+    }
+
     final def = variable.defaultValue;
     _out.write('${variable.name}${def != null ? ' [$def]' : ''}: ');
 

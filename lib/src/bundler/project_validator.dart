@@ -1,13 +1,15 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../manifest/content_policy.dart';
 import '../manifest/manifest.dart';
 import '../unbundler/case_converter.dart';
+import '../unbundler/substitutor.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
-import 'file_classifier.dart';
 import 'file_scanner.dart';
 
 /// How often a token's casings matched, and how much of that was collateral —
@@ -18,6 +20,10 @@ class _TokenStats {
 
   /// Enclosing identifier → how many of [adjacent] it accounts for.
   final Map<String, int> _collisions = {};
+
+  /// Packed files copied verbatim that hold one of the casings, in scan
+  /// order. Not counted in [matches]: substitution never reaches them.
+  final List<String> verbatimFiles = [];
 
   /// Total occurrences of any derived casing.
   int get matches => _matches;
@@ -49,7 +55,12 @@ class _TokenStats {
 
 /// Input to the [ProjectValidator]: the source [dir] and its [manifest].
 class ProjectInput {
-  const ProjectInput({required this.dir, required this.manifest, this.scan});
+  const ProjectInput({
+    required this.dir,
+    required this.manifest,
+    this.scan,
+    this.contents,
+  });
 
   /// The source project directory.
   final String dir;
@@ -68,6 +79,15 @@ class ProjectInput {
   /// Null means "scan it yourself", which is what a caller validating a
   /// directory it has not touched does.
   final ScanResult? scan;
+
+  /// The bytes of the scanned files, keyed like [ScanResult.files], when the
+  /// caller has already read them.
+  ///
+  /// Same reasoning as [scan]: `Bundler` reads every file to pack it, and the
+  /// validator reading each one again — as a string, a second copy of the
+  /// whole corpus — was duplicate I/O. A file missing from the map is read
+  /// from disk.
+  final Map<String, List<int>>? contents;
 }
 
 /// Validates the source project (pack phase): the directory has files to pack,
@@ -94,6 +114,9 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   static const partialOverlap = 'PROJECT_PARTIAL_OVERLAP';
   static const symlinkSkipped = 'PROJECT_SYMLINK_SKIPPED';
   static const tokenTooGeneric = 'PROJECT_TOKEN_TOO_GENERIC';
+  static const tokenInVerbatim = 'PROJECT_TOKEN_IN_VERBATIM';
+  static const substitutionUnused = 'PROJECT_SUBSTITUTION_UNUSED';
+  static const pathRenameUnused = 'PROJECT_PATH_RENAME_UNUSED';
 
   /// At or above this share of collateral matches, packing is refused.
   static const _errorRatio = 0.30;
@@ -158,12 +181,27 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       for (final variable in input.manifest.variables)
         if (variable.replaces case final t? when t.isNotEmpty) variable.name: t,
     };
-    final stats = _findTokens(input.dir, input.manifest, relPaths, tokens);
+    final search = _Search(input.manifest, tokens.values);
+    _scanCorpus(input, relPaths, search);
 
     for (final entry in tokens.entries) {
       final name = entry.key;
       final token = entry.value;
-      final s = stats[token]!;
+      final s = search.stats[token]!;
+
+      final verbatim = s.verbatimFiles;
+      if (verbatim.isNotEmpty) {
+        issues.add(
+          .warning(
+            tokenInVerbatim,
+            "Variable '$name': token '$token' occurs in ${verbatim.length} "
+            'file(s) copied verbatim, which keep it as it is: '
+            '${_sample(verbatim)}. Their paths are still renamed; their '
+            'content is not (binary_extensions, no_substitute, or not UTF-8).',
+            field: name,
+          ),
+        );
+      }
 
       if (s.matches == 0) {
         issues.add(
@@ -202,107 +240,311 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       }
     }
 
+    for (final rule in search.contentRules.values) {
+      if (rule.hits == 0) {
+        issues.add(
+          .warning(
+            substitutionUnused,
+            "extra_substitutions: '${rule.from}' occurs in no substituted "
+            'file, so the entry does nothing.',
+            field: rule.from,
+          ),
+        );
+      }
+    }
+    for (final rule in search.pathRules.values) {
+      if (rule.hits == 0) {
+        issues.add(
+          .warning(
+            pathRenameUnused,
+            "path_renames: '${rule.from}' occurs in no packed path, so the "
+            'entry does nothing.',
+            field: rule.from,
+          ),
+        );
+      }
+    }
+
     return ValidationResult(issues);
   }
 
-  /// Counts, per token, how often any of its **derived casings** occurs in the
-  /// packed paths and text, and how many of those sit inside a longer word.
+  /// The first few of [paths], for a message.
+  static String _sample(List<String> paths, [int limit = 3]) {
+    final shown = paths.take(limit).join(', ');
+
+    return paths.length > limit
+        ? '$shown and ${paths.length - limit} more'
+        : shown;
+  }
+
+  /// Runs [search] over every packed path and every substituted text, the
+  /// way unpacking will meet them.
   ///
-  /// Searching the raw `replaces` string was a false-negative the size of the
-  /// casing expansion: `replaces: my_app` against a project containing
-  /// `MyApplication` and `MY_APPENDIX` validated clean and then corrupted both.
-  /// The needles come from `CaseConverter.replacements`, the substitutor's own
-  /// source of truth, so the check cannot drift from what substitution does.
+  /// Paths are matched with the path rules (`path_renames`), text with the
+  /// content rules (`extra_substitutions`), and a file copied verbatim is
+  /// searched only to say that it keeps the token.
   ///
   /// The whole corpus is scanned — a ratio needs every match, so there is no
   /// early exit.
   ///
   /// The manifest file itself is skipped: its `replaces:` line is a
   /// declaration, not evidence that the project uses the token.
-  Map<String, _TokenStats> _findTokens(
-    String dir,
-    Manifest manifest,
-    List<String> relPaths,
-    Map<String, String> tokens,
-  ) {
-    final stats = {for (final t in tokens.values) t: _TokenStats()};
-    if (tokens.isEmpty) {
-      return stats;
+  void _scanCorpus(ProjectInput input, List<String> relPaths, _Search search) {
+    if (search.isEmpty) {
+      return;
     }
 
-    final casings = {
-      for (final token in tokens.values) token: _Needle.casingsOf(token),
-    };
-    final classifier = FileClassifier(
-      extraBinary: manifest.binaryExtensions.toSet(),
-    );
-    final manifestPath = manifest.path;
-    final excluded = manifestPath == null ? null : p.canonicalize(manifestPath);
-
+    final policy = ContentPolicy(input.manifest);
+    final manifestRel = _manifestRel(input);
     for (final rel in relPaths) {
-      if (excluded != null && p.canonicalize(p.join(dir, rel)) == excluded) {
+      if (rel == manifestRel) {
         continue;
       }
 
-      var chunk = '$rel\n';
-      if (!classifier.isBinary(rel)) {
-        try {
-          chunk += File(p.join(dir, rel)).readAsStringSync();
-        } on FileSystemException {
-          // Unreadable file — skip its contents.
-        } on FormatException {
-          // Non-UTF-8 despite a text extension — skip its contents.
-        }
+      search.paths(rel);
+      if (policy.isVerbatimPath(rel)) {
+        search.verbatim(rel, () => _read(input, rel));
+        continue;
       }
 
-      for (final entry in casings.entries) {
-        final target = stats[entry.key]!;
-        for (final needle in entry.value) {
-          _count(chunk, needle, target);
-        }
+      final bytes = _read(input, rel);
+      if (bytes == null) {
+        continue;
+      }
+      final text = policy.decode(rel, bytes);
+      if (text == null) {
+        search.verbatim(rel, () => bytes);
+      } else {
+        search.content(text);
+      }
+    }
+  }
+
+  /// The manifest's own path relative to the project, when it lies inside it.
+  ///
+  /// Resolved once: canonicalizing every packed path to compare it with the
+  /// manifest's was a string-heavy call per file.
+  static String? _manifestRel(ProjectInput input) {
+    final manifestPath = input.manifest.path;
+    if (manifestPath == null) {
+      return null;
+    }
+    final root = p.canonicalize(input.dir);
+    final manifest = p.canonicalize(manifestPath);
+    if (!p.isWithin(root, manifest)) {
+      return null;
+    }
+
+    return p.posix.joinAll(p.split(p.relative(manifest, from: root)));
+  }
+
+  static List<int>? _read(ProjectInput input, String rel) {
+    final given = input.contents?[rel];
+    if (given != null) {
+      return given;
+    }
+    try {
+      return File(p.join(input.dir, rel)).readAsBytesSync();
+    } on FileSystemException {
+      // Unreadable file — nothing to search.
+      return null;
+    }
+  }
+}
+
+/// How often one explicit substitution's `from` was met.
+class _RuleUse {
+  _RuleUse(this.from);
+
+  final String from;
+  var hits = 0;
+}
+
+/// What one matched literal counts towards: a token casing, an explicit
+/// substitution, or — when an `extra_substitutions.from` equals a derived
+/// casing — both.
+class _Site {
+  _Site({this.needle, this.stats});
+
+  _Needle? needle;
+  _TokenStats? stats;
+  _RuleUse? rule;
+}
+
+/// The token check's matcher: every literal substitution would act on, in
+/// one alternation per side, so it meets the corpus exactly as unpacking
+/// will.
+///
+/// One pattern rather than an `indexOf` loop per casing. The loop scanned
+/// every text once per casing and was most of the pack time — about 600 ms of
+/// 1.3 s on a 48 MB corpus, against about 110 ms for the alternation. And the
+/// alternation is the substitutor's own (longest first, non-overlapping), so
+/// the explicit substitutions take part too: a site an `extra_substitutions`
+/// entry claims is no longer counted against the token, which is the remedy
+/// the too-generic error recommends — and which used to change nothing.
+class _Search {
+  factory _Search(Manifest manifest, Iterable<String> tokens) {
+    final stats = <String, _TokenStats>{};
+    final needles = <String, (_Needle, _TokenStats)>{};
+    for (final token in tokens) {
+      final s = stats.putIfAbsent(token, _TokenStats.new);
+      // A later variable wins a shared casing, as in the substitution table.
+      for (final needle in _Needle.casingsOf(token)) {
+        needles[needle.text] = (needle, s);
       }
     }
 
-    return stats;
+    Map<String, _Site> sites(
+      List<Substitution> rules,
+      Map<String, _RuleUse> uses,
+    ) {
+      final out = {
+        for (final MapEntry(key: text, value: (needle, s)) in needles.entries)
+          text: _Site(needle: needle, stats: s),
+      };
+      for (final rule in rules) {
+        final use = uses.putIfAbsent(rule.from, () => _RuleUse(rule.from));
+        (out[rule.from] ??= _Site()).rule = use;
+      }
+
+      return out;
+    }
+
+    final contentRules = <String, _RuleUse>{};
+    final pathRules = <String, _RuleUse>{};
+    final contentSites = sites(manifest.extraSubstitutions, contentRules);
+    final pathSites = sites(manifest.pathRenames, pathRules);
+
+    return _Search._(
+      stats: stats,
+      contentRules: contentRules,
+      pathRules: pathRules,
+      contentSites: contentSites,
+      pathSites: pathSites,
+      contentPattern: Substitutor.alternation(contentSites.keys),
+      pathPattern: Substitutor.alternation(pathSites.keys),
+      needlePattern: Substitutor.alternation(needles.keys),
+      needleStats: {
+        for (final MapEntry(key: text, value: (_, s)) in needles.entries)
+          text: s,
+      },
+    );
   }
 
-  /// One word character. Static because [_count] runs once per packed file per
-  /// casing — a local rebuilt the pattern thousands of times per pack.
-  static final _word = RegExp(r'\w');
+  _Search._({
+    required this.stats,
+    required this.contentRules,
+    required this.pathRules,
+    required this._contentSites,
+    required this._pathSites,
+    required this._contentPattern,
+    required this._pathPattern,
+    required this._needlePattern,
+    required this._needleStats,
+  });
 
-  /// Tallies every occurrence of [needle] in [hay] into [into], recording the
-  /// enclosing identifier whenever the match is part of a longer word.
+  /// Per `replaces` token.
+  final Map<String, _TokenStats> stats;
+
+  /// Per `extra_substitutions.from`.
+  final Map<String, _RuleUse> contentRules;
+
+  /// Per `path_renames.from`.
+  final Map<String, _RuleUse> pathRules;
+
+  final Map<String, _Site> _contentSites;
+  final Map<String, _Site> _pathSites;
+  final RegExp? _contentPattern;
+  final RegExp? _pathPattern;
+  final RegExp? _needlePattern;
+  final Map<String, _TokenStats> _needleStats;
+
+  /// Whether there is nothing to look for at all.
+  bool get isEmpty => _contentPattern == null && _pathPattern == null;
+
+  /// Counts the matches in the packed path [rel].
+  void paths(String rel) => _tally(rel, _pathPattern, _pathSites);
+
+  /// Counts the matches in the substituted text [text].
+  void content(String text) => _tally(text, _contentPattern, _contentSites);
+
+  /// Notes which tokens the verbatim file [rel] holds.
+  ///
+  /// Searched as Latin-1, which maps each byte to one character: the casings
+  /// are ASCII, so a match is a byte-for-byte occurrence whatever the file's
+  /// encoding, and decoding cannot fail. [bytes] is only called when there is
+  /// a token to look for.
+  void verbatim(String rel, List<int>? Function() bytes) {
+    final pattern = _needlePattern;
+    if (pattern == null) {
+      return;
+    }
+    final data = bytes();
+    if (data == null) {
+      return;
+    }
+
+    final found = <_TokenStats>{
+      for (final m in pattern.allMatches(latin1.decode(data)))
+        _needleStats[m[0]!]!,
+    };
+    for (final s in found) {
+      s.verbatimFiles.add(rel);
+    }
+  }
+
+  static void _tally(String hay, RegExp? pattern, Map<String, _Site> sites) {
+    if (pattern == null) {
+      return;
+    }
+    for (final m in pattern.allMatches(hay)) {
+      final site = sites[m[0]!]!;
+      site.rule?.hits++;
+      final needle = site.needle;
+      if (needle != null) {
+        _record(hay, m.start, m.end, needle, site.stats!);
+      }
+    }
+  }
+
+  /// Records one match of [needle] at [start]..[end] in [hay], with the
+  /// enclosing identifier when the match is part of a longer word.
   ///
   /// What counts as "part of a longer word" is the needle's own casing — see
-  /// [_Needle]. Treating every `\w` as a continuation made `_` one,
-  /// so `app_template_test` counted as over-reach for `replaces: app_template`
+  /// [_Needle]. Treating every `\w` as a continuation made `_` one, so
+  /// `app_template_test` counted as over-reach for `replaces: app_template`
   /// although rewriting it to `my_app_test` is exactly the point.
-  void _count(String hay, _Needle needle, _TokenStats into) {
-    final text = needle.text;
-    for (var i = hay.indexOf(text); i != -1; i = hay.indexOf(text, i + 1)) {
-      final end = i + text.length;
-      final before = i > 0 && needle.continuesBefore(hay.codeUnitAt(i - 1));
-      final after =
-          end < hay.length && needle.continuesAfter(hay.codeUnitAt(end));
-      if (!before && !after) {
-        into.record();
-        continue;
-      }
-
-      // Expand outward to name the identifier this match is buried in.
-      var start = i;
-      while (start > 0 && _word.hasMatch(hay[start - 1])) {
-        start--;
-      }
-
-      var stop = end;
-      while (stop < hay.length && _word.hasMatch(hay[stop])) {
-        stop++;
-      }
-
-      into.record(enclosing: hay.substring(start, stop));
+  static void _record(
+    String hay,
+    int start,
+    int end,
+    _Needle needle,
+    _TokenStats into,
+  ) {
+    final before =
+        start > 0 && needle.continuesBefore(hay.codeUnitAt(start - 1));
+    final after =
+        end < hay.length && needle.continuesAfter(hay.codeUnitAt(end));
+    if (!before && !after) {
+      into.record();
+      return;
     }
+
+    // Expand outward to name the identifier this match is buried in.
+    var from = start;
+    while (from > 0 && _isWord(hay.codeUnitAt(from - 1))) {
+      from--;
+    }
+    var to = end;
+    while (to < hay.length && _isWord(hay.codeUnitAt(to))) {
+      to++;
+    }
+
+    into.record(enclosing: hay.substring(from, to));
   }
+
+  /// `\w`, on a code unit.
+  static bool _isWord(int u) => _Needle._isAlnum(u) || u == 0x5F;
 }
 
 /// One derived casing of a `replaces` token, and the rule for which adjacent

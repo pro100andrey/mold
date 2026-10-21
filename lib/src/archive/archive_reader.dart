@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 
@@ -17,7 +18,9 @@ class BundleArchive {
   final String manifestYaml;
 
   /// The captured files, keyed by their path relative to `files/`.
-  final Map<String, List<int>> files;
+  ///
+  /// Views into the decoded tar, not copies of it.
+  final Map<String, Uint8List> files;
 
   /// The subset of [files] keys recorded with an owner-executable mode.
   final Set<String> executable;
@@ -34,14 +37,20 @@ class ArchiveReader {
 
   /// Decodes [bytes] (gzip + tar) into the embedded manifest and `files/` tree.
   ///
-  /// Throws a [FormatException] if the archive is missing `mold.yaml`, and an
+  /// Expects a valid archive — run `ArchiveValidator` first. Throws an
   /// [ArchiveTooLargeException] if it expands past [maxDecompressedBytes].
   BundleArchive read(List<int> bytes) {
     final tar = decodeGzipBounded(bytes, maxBytes: maxDecompressedBytes);
-    final archive = TarDecoder().decodeBytes(tar);
 
+    return fromTar(TarDecoder().decodeBytes(tar));
+  }
+
+  /// Builds a [BundleArchive] from an already-decoded [archive] — the one
+  /// `ArchiveValidator.inspect` hands back, so validating and reading decode
+  /// once.
+  BundleArchive fromTar(Archive archive) {
     String? manifestYaml;
-    final files = <String, List<int>>{};
+    final files = <String, Uint8List>{};
     final executable = <String>{};
     for (final file in archive) {
       if (!file.isFile) {
@@ -50,10 +59,13 @@ class ArchiveReader {
 
       final name = file.name;
       if (name == 'mold.yaml') {
-        manifestYaml = utf8.decode(file.content as List<int>);
+        manifestYaml = utf8.decode(file.content);
       } else if (name.startsWith('files/')) {
         final rel = name.substring('files/'.length);
-        files[rel] = .from(file.content as List<int>);
+        // A view into the tar, not a copy. `List<int>.from` made a boxed list
+        // — eight bytes per byte of content — and was most of an unpack:
+        // 536 ms and ~390 MB for a 48 MB template.
+        files[rel] = file.content;
         // 0o100 — owner-execute.
         if (file.mode & 64 != 0) {
           executable.add(rel);
@@ -62,7 +74,8 @@ class ArchiveReader {
     }
 
     if (manifestYaml == null) {
-      throw const FormatException('Archive is missing mold.yaml.');
+      // ArchiveValidator reports a missing manifest before anything reads.
+      throw StateError('Archive is missing mold.yaml.');
     }
 
     return BundleArchive(

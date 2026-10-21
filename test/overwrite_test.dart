@@ -1,8 +1,9 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Matches a [ValidationException] carrying [code].
 Matcher rejectsWith(String code) => throwsA(
@@ -68,12 +69,12 @@ void main() {
   });
 
   Future<void> unpack({bool overwrite = false, List<String>? warnings}) =>
-      const Unbundler().unbundleBytes(
-        source: archive,
+      const Unbundler().unbundle(
+        bytes: archive,
         targetDir: out.path,
         vars: {'name': 'my_app'},
         overwrite: overwrite,
-        onWarning: warnings?.add,
+        onWarning: warnings == null ? null : (w) => warnings.add('$w'),
       );
 
   /// A project already scaffolded from the template, then worked on.

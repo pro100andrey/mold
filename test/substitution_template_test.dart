@@ -1,5 +1,6 @@
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Asserts the template parsed cleanly and renders [expected] from [values].
 void expectRenders(
@@ -171,7 +172,7 @@ void main() {
       expect(
         () => parsed.render(const {}),
         throwsA(
-          isA<FormatException>().having(
+          isA<StateError>().having(
             (e) => e.message,
             'message',
             contains('missing'),

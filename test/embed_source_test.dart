@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Extracts the `<int>[ ... ]` payload from a `bytes` source back into a list.
 List<int> parseBytesSource(String src) {

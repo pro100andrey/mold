@@ -24,6 +24,26 @@ class Substitutor {
     return input.replaceAllMapped(pattern, (m) => _table[m[0]!]!);
   }
 
+  /// [apply] and [count] in one pass: the rewritten text and how many
+  /// replacements it took.
+  ///
+  /// A preview needs both, and two passes ran the pattern over every text
+  /// file twice.
+  (String, int) applyCounted(String input) {
+    final pattern = _pattern;
+    if (pattern == null) {
+      return (input, 0);
+    }
+
+    var count = 0;
+    final out = input.replaceAllMapped(pattern, (m) {
+      count++;
+      return _table[m[0]!]!;
+    });
+
+    return (out, count);
+  }
+
   /// How many replacements [apply] would make in [input].
   ///
   /// Counted from the same pattern [apply] uses, so a preview reports exactly
@@ -39,15 +59,23 @@ class Substitutor {
   static String _escape(String s) =>
       s.replaceAllMapped(_special, (m) => '\\${m[0]}');
 
-  /// Builds the alternation pattern, longest token first. Returns null when
-  /// there is nothing to replace.
-  static RegExp? _build(Map<String, String> replacements) {
-    final keys = replacements.keys.where((k) => k.isNotEmpty).toList()
+  static RegExp? _build(Map<String, String> replacements) =>
+      alternation(replacements.keys);
+
+  /// The pattern matching any of [keys] the way [apply] does: one
+  /// alternation, longest key first, so a shorter key never pre-empts a longer
+  /// one at the same position. Null when there is nothing to match.
+  ///
+  /// Public so a measurement of what substitution would do — the pack-time
+  /// token check — can match with substitution's own pattern rather than an
+  /// approximation of it.
+  static RegExp? alternation(Iterable<String> keys) {
+    final sorted = keys.where((k) => k.isNotEmpty).toSet().toList()
       ..sort((a, b) => b.length.compareTo(a.length));
-    if (keys.isEmpty) {
+    if (sorted.isEmpty) {
       return null;
     }
 
-    return RegExp(keys.map(_escape).join('|'));
+    return RegExp(sorted.map(_escape).join('|'));
   }
 }

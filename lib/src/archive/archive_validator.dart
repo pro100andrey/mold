@@ -19,6 +19,7 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
   static const missingFiles = 'ARCHIVE_MISSING_FILES';
   static const unsafePath = 'ARCHIVE_UNSAFE_PATH';
   static const tooLarge = 'ARCHIVE_TOO_LARGE';
+  static const notFound = 'ARCHIVE_NOT_FOUND';
 
   /// The ceiling on the decompressed archive. See [decodeGzipBounded].
   final int maxDecompressedBytes;
@@ -27,7 +28,15 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
   String get phase => 'archive';
 
   @override
-  ValidationResult validate(List<int> input) {
+  ValidationResult validate(List<int> input) => inspect(input).result;
+
+  /// Validates [input] and hands back the decoded tar, so a reader does not
+  /// decode it a second time.
+  ///
+  /// Validating and then reading used to gunzip and parse the archive twice —
+  /// two passes over it, and two copies of the decompressed tar alive at once.
+  /// `tar` is null exactly when the archive could not be decoded.
+  ({ValidationResult result, Archive? tar}) inspect(List<int> input) {
     final Archive archive;
     try {
       final tar = decodeGzipBounded(input, maxBytes: maxDecompressedBytes);
@@ -36,11 +45,17 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
       // Its own code rather than ARCHIVE_INVALID: the archive is well-formed,
       // which is precisely what makes it dangerous, and "not a valid gzipped
       // tar" would send the reader looking for corruption that is not there.
-      return ValidationResult([ValidationError(tooLarge, e.message)]);
+      return (
+        result: ValidationResult([ValidationError(tooLarge, e.message)]),
+        tar: null,
+      );
     } on Object {
-      return ValidationResult([
-        const ValidationError(invalid, 'Not a valid gzipped tar archive.'),
-      ]);
+      return (
+        result: ValidationResult([
+          const ValidationError(invalid, 'Not a valid gzipped tar archive.'),
+        ]),
+        tar: null,
+      );
     }
 
     final names = archive.files
@@ -84,6 +99,6 @@ class ArchiveValidator extends ValidatorBase<List<int>> {
       }
     }
 
-    return ValidationResult(issues);
+    return (result: ValidationResult(issues), tar: archive);
   }
 }

@@ -1,3 +1,7 @@
+import 'dart:typed_data';
+
+import '../manifest/manifest.dart';
+
 /// What an unpack would do to one archive entry.
 class PlannedFile {
   const PlannedFile({
@@ -5,6 +9,8 @@ class PlannedFile {
     required this.to,
     required this.verbatim,
     required this.replacements,
+    required this.bytes,
+    this.executable = false,
     this.before,
     this.after,
     this.overwrites = false,
@@ -25,18 +31,29 @@ class PlannedFile {
   /// How many substitutions the content would receive. Zero for [verbatim].
   final int replacements;
 
-  /// The decoded content before substitution; null when [verbatim].
+  /// Exactly the bytes that would be written.
+  ///
+  /// For a file nothing is substituted in, this is the archive's own buffer,
+  /// not a copy of it.
+  final Uint8List bytes;
+
+  /// Whether the file would be made owner-executable.
+  final bool executable;
+
+  /// The decoded content before substitution; null when [verbatim] or when the
+  /// plan was built without content.
   final String? before;
 
-  /// The decoded content after substitution; null when [verbatim].
+  /// The decoded content after substitution; null when [verbatim] or when the
+  /// plan was built without content.
   final String? after;
 
   /// Whether a file is already at [to] in the target, so writing this one
   /// replaces it. Only an overwrite unpack can plan one.
   final bool overwrites;
 
-  /// Whether the file already at [to] holds exactly the bytes this one would
-  /// write — an overwrite that changes nothing. False when nothing is there.
+  /// Whether the file already at [to] holds exactly [bytes] — an overwrite
+  /// that changes nothing. False when nothing is there.
   final bool identicalToExisting;
 
   /// The decoded text of the file already at [to]; null when nothing is
@@ -52,14 +69,34 @@ class PlannedFile {
 
 /// Everything an unpack would do, without doing any of it.
 ///
-/// Produced by `Unbundler.plan` from the same rules `_write` uses, so a preview
-/// cannot drift from the real thing — it is the same computation minus the
-/// writes.
+/// Produced by `Unbundler.plan`, and written by `Unbundler.apply` — which is
+/// also how `Unbundler.unbundle` writes. A preview cannot drift from the real
+/// thing because there is no separate real thing: an unpack is a plan, then
+/// its application.
 class UnpackPlan {
-  const UnpackPlan(this.files);
+  const UnpackPlan({
+    required this.files,
+    required this.manifest,
+    required this.values,
+    this.targetDir,
+    this.overwrite = false,
+  });
 
   /// One entry per archive file, in archive order.
   final List<PlannedFile> files;
+
+  /// The template's manifest, as embedded in the archive.
+  final Manifest manifest;
+
+  /// The resolved value of every declared variable.
+  final Map<String, String> values;
+
+  /// Where the plan writes; null for a plan made with no destination in mind,
+  /// which can be inspected but not applied.
+  final String? targetDir;
+
+  /// Whether the plan writes into an occupied target.
+  final bool overwrite;
 
   /// Files whose path changes.
   Iterable<PlannedFile> get renamed => files.where((f) => f.renamed);
@@ -67,14 +104,14 @@ class UnpackPlan {
   /// Files whose content changes.
   Iterable<PlannedFile> get rewritten => files.where((f) => f.replacements > 0);
 
+  /// Files nothing happens to.
+  Iterable<PlannedFile> get untouched => files.where((f) => !f.changed);
+
   /// Files whose path is free in the target.
   Iterable<PlannedFile> get created => files.where((f) => !f.overwrites);
 
   /// Files that replace one already in the target.
   Iterable<PlannedFile> get overwritten => files.where((f) => f.overwrites);
-
-  /// Files nothing happens to.
-  Iterable<PlannedFile> get untouched => files.where((f) => !f.changed);
 
   /// Total substitutions across every file.
   int get totalReplacements => files.fold(0, (sum, f) => sum + f.replacements);

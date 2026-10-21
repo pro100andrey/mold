@@ -1,9 +1,10 @@
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Matches a result carrying an error-severity issue with the given code.
 Matcher rejectsWith(String code) => predicate<ValidationResult>(

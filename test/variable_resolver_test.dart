@@ -1,5 +1,6 @@
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// A prompter backed by a scripted queue of input lines (no real stdin).
 VariablePrompter scriptedPrompter(List<String?> lines, StringSink out) {

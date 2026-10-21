@@ -1,8 +1,9 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Matches a result carrying an error-severity issue with the given code.
 Matcher rejectsWith(String code) => predicate<ValidationResult>(
@@ -212,7 +213,7 @@ const binaryExtensions = [];
             TemplateVariable(name: 'name', replaces: 'app_template'),
           ],
         ),
-        onWarning: warnings.add,
+        onWarning: (w) => warnings.add('$w'),
       );
 
       expect(warnings, isEmpty);

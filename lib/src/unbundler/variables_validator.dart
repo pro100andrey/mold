@@ -35,6 +35,8 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
   static const missing = 'VARIABLE_MISSING';
   static const invalidFormat = 'VARIABLE_INVALID_FORMAT';
   static const unknown = 'VARIABLE_UNKNOWN';
+  static const patternMismatch = 'VARIABLE_PATTERN_MISMATCH';
+  static const notAChoice = 'VARIABLE_NOT_A_CHOICE';
 
   /// A value used for a `replaces` token must read like an identifier: start
   /// with a letter, then letters/digits/space/underscore/hyphen.
@@ -84,6 +86,29 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
             ),
           );
         }
+        continue;
+      }
+
+      if (variable.choices.isNotEmpty && !variable.choices.contains(value)) {
+        issues.add(
+          ValidationError(
+            notAChoice,
+            "Variable '${variable.name}' value '$value' is not one of: "
+            '${variable.choices.join(', ')}.',
+            field: variable.name,
+          ),
+        );
+        continue;
+      }
+      if (variable.pattern != null && !variable.accepts(value)) {
+        issues.add(
+          ValidationError(
+            patternMismatch,
+            "Variable '${variable.name}' value '$value' does not match "
+            "pattern '${variable.pattern}'.",
+            field: variable.name,
+          ),
+        );
         continue;
       }
 

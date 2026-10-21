@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Matches a [ValidationException] carrying [code].
 Matcher rejectsWith(String code) => throwsA(
@@ -50,8 +51,8 @@ path_renames:
       // Before this check the writer created same.txt twice and the second
       // entry won, so an archive holding two files unpacked into one.
       expect(
-        () => const Unbundler().unbundleBytes(
-          source: archive,
+        () => const Unbundler().unbundle(
+          bytes: archive,
           targetDir: '${tmp.path}/out',
         ),
         rejectsWith(RenameValidator.collision),
@@ -78,8 +79,8 @@ variables:
 ''');
 
       expect(
-        () => const Unbundler().unbundleBytes(
-          source: archive,
+        () => const Unbundler().unbundle(
+          bytes: archive,
           targetDir: '${tmp.path}/out',
           vars: const {'n': 'shop'},
         ),
@@ -131,8 +132,8 @@ path_renames:
       write('beta.txt', 'b\n');
       final archive = await pack('name: t\nversion: 1\n');
 
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
       );
       expect(Directory('${tmp.path}/out').listSync(), hasLength(2));
@@ -232,12 +233,12 @@ path_renames:
     // YAML 1.1 read these as booleans; package:yaml is 1.2, where they are
     // plain strings, and `as bool?` turned that into an exit-255 TypeError.
     for (final value in ['yes', 'on', '1', '"false"', 'maybe']) {
-      test('`use_gitignore: $value` is a FormatException, not a crash', () {
+      test('`use_gitignore: $value` is MANIFEST_INVALID, not a crash', () {
         final yaml = 'name: t\nversion: 1\nuse_gitignore: $value\n';
         expect(
           () => Manifest.fromYaml(yaml),
           throwsA(
-            isA<FormatException>().having(
+            isA<ValidationException>().having(
               (e) => e.message,
               'message',
               contains('use_gitignore'),
@@ -297,8 +298,8 @@ variables:
 ''');
 
       expect(
-        () => const Unbundler().unbundleBytes(
-          source: archive,
+        () => const Unbundler().unbundle(
+          bytes: archive,
           targetDir: '${tmp.path}/out',
           vars: const {'projectname': 'what_i_meant'},
         ),
@@ -378,7 +379,7 @@ variables:
   dead_var:
     default: nothing
 '''),
-        onWarning: packWarnings.add,
+        onWarning: (w) => packWarnings.add('$w'),
       );
       expect(
         packWarnings.single,
@@ -387,10 +388,10 @@ variables:
       );
 
       final unpackWarnings = <String>[];
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
-        onWarning: unpackWarnings.add,
+        onWarning: (w) => unpackWarnings.add('$w'),
       );
 
       // Whoever unpacks a template is rarely whoever packed it, so a warning
@@ -409,7 +410,10 @@ variables:
 ''');
 
       final warnings = <String>[];
-      const Unbundler().plan(bytes: archive, onWarning: warnings.add);
+      const Unbundler().plan(
+        bytes: archive,
+        onWarning: (w) => warnings.add('$w'),
+      );
 
       expect(warnings.single, contains(ManifestValidator.unusedVariable));
     });

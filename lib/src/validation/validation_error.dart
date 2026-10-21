@@ -1,3 +1,6 @@
+/// Receives the non-fatal issues of an operation as they are found.
+typedef WarningSink = void Function(ValidationError warning);
+
 /// Whether an issue blocks the operation ([error]) or is advisory ([warning]).
 enum Severity {
   /// Blocks the operation; surfaces via `ValidationResult.throwIfInvalid`.

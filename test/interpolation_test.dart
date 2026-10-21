@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// The manifest under test: a `replaces` shorthand for the bulk rename, plus
 /// two explicit substitutions for the forms the four casings cannot reach.
@@ -80,8 +81,8 @@ void main() {
         manifest: Manifest.fromYaml(_manifest),
       );
       final out = Directory('${tmp.path}/out');
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: out.path,
         vars: {'project_name': value},
       );
@@ -178,8 +179,8 @@ path_renames:
 '''),
       );
       final out = Directory('${tmp.path}/out');
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: out.path,
         vars: const {'org': 'com.acmeCorp'},
       );
@@ -212,8 +213,8 @@ extra_substitutions:
 '''),
       );
       final out = Directory('${tmp.path}/out');
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: out.path,
         vars: const {'project_name': 'my_project'},
       );
@@ -241,8 +242,8 @@ extra_substitutions:
 '''),
       );
       final out = Directory('${tmp.path}/out');
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: out.path,
         vars: const {'project_name': 'OLD_AGAIN'},
       );

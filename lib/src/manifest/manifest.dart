@@ -2,6 +2,10 @@ import 'dart:io';
 
 import 'package:yaml/yaml.dart';
 
+import '../validation/validation_error.dart';
+import '../validation/validation_result.dart';
+import 'manifest_validator.dart';
+
 /// One declared rename variable.
 ///
 /// At unpack time the resolved value substitutes every casing of [replaces]
@@ -14,6 +18,8 @@ class TemplateVariable {
     this.description = '',
     this.defaultValue,
     this.replaces,
+    this.pattern,
+    this.choices = const [],
   });
 
   /// The variable key (e.g. `project_name`), used by `--var key=value`.
@@ -29,21 +35,59 @@ class TemplateVariable {
   /// exists only to be interpolated into `extra_substitutions`.
   final String? replaces;
 
+  /// A regular expression the whole value must match, or null for any value.
+  ///
+  /// Anchored by the check itself — `pattern: '[a-z]+'` accepts `abc`, not
+  /// `abc1` — so an author does not have to remember `^…$`.
+  final String? pattern;
+
+  /// The only values allowed, or empty for any value.
+  final List<String> choices;
+
+  /// Whether [value] satisfies [pattern] and [choices].
+  ///
+  /// A [pattern] that does not compile accepts nothing; `ManifestValidator`
+  /// reports it before any value is checked.
+  bool accepts(String value) {
+    if (choices.isNotEmpty && !choices.contains(value)) {
+      return false;
+    }
+    final source = pattern;
+    if (source == null) {
+      return true;
+    }
+    try {
+      return RegExp('^(?:$source)\$').hasMatch(value);
+    } on FormatException {
+      return false;
+    }
+  }
+
   @override
   bool operator ==(Object other) =>
       other is TemplateVariable &&
       other.name == name &&
       other.description == description &&
       other.defaultValue == defaultValue &&
-      other.replaces == replaces;
+      other.replaces == replaces &&
+      other.pattern == pattern &&
+      _listEquals(other.choices, choices);
 
   @override
-  int get hashCode => Object.hash(name, description, defaultValue, replaces);
+  int get hashCode => Object.hash(
+    name,
+    description,
+    defaultValue,
+    replaces,
+    pattern,
+    Object.hashAll(choices),
+  );
 
   @override
   String toString() =>
       'TemplateVariable($name, description: $description, '
-      'default: $defaultValue, replaces: $replaces)';
+      'default: $defaultValue, replaces: $replaces, pattern: $pattern, '
+      'choices: $choices)';
 }
 
 /// A literal text replacement applied to file contents at unpack time, for
@@ -113,7 +157,27 @@ class Manifest {
   /// Parses a manifest from raw YAML [text]. [source] defaults to [text] so the
   /// original bytes can be embedded into the archive; [path] records where the
   /// text came from, when it came from a file.
+  ///
+  /// Text that is not YAML, or not shaped like a manifest, is
+  /// `MANIFEST_INVALID` — a [ValidationException] like every other problem
+  /// with the inputs, so a caller handles one exception type. What is
+  /// well-formed but wrong (a missing name, a bad glob) is reported by
+  /// `ManifestValidator`.
   factory Manifest.fromYaml(String text, {String? path}) {
+    try {
+      return Manifest._parse(text, path);
+    } on FormatException catch (e) {
+      final where = path == null ? '' : '$path: ';
+      throw ValidationException([
+        ValidationError(
+          ManifestValidator.invalid,
+          '$where${e is YamlException ? e.toString() : e.message}',
+        ),
+      ]);
+    }
+  }
+
+  factory Manifest._parse(String text, String? path) {
     final doc = loadYaml(text);
     if (doc is! YamlMap) {
       throw const FormatException('Manifest must be a YAML mapping.');
@@ -142,7 +206,12 @@ class Manifest {
   factory Manifest.fromFile(String path) {
     final file = File(path);
     if (!file.existsSync()) {
-      throw FormatException('Manifest not found: $path');
+      throw ValidationException([
+        ValidationError(
+          ManifestValidator.notFound,
+          'Manifest not found: $path',
+        ),
+      ]);
     }
 
     return .fromYaml(file.readAsStringSync(), path: path);
@@ -299,9 +368,14 @@ class Manifest {
       for (final v in variables) {
         final defaultValue = v.defaultValue;
         final replaces = v.replaces;
+        final pattern = v.pattern;
         // A variable with no sub-fields still needs an explicit empty mapping:
         // a bare `name:` parses back as null, not as a mapping.
-        if (v.description.isEmpty && defaultValue == null && replaces == null) {
+        if (v.description.isEmpty &&
+            defaultValue == null &&
+            replaces == null &&
+            pattern == null &&
+            v.choices.isEmpty) {
           buffer.writeln('  ${_scalar(v.name)}: {}');
           continue;
         }
@@ -318,6 +392,17 @@ class Manifest {
 
         if (replaces != null) {
           buffer.writeln('    replaces: ${_scalar(replaces)}');
+        }
+
+        if (pattern != null) {
+          buffer.writeln('    pattern: ${_scalar(pattern)}');
+        }
+
+        if (v.choices.isNotEmpty) {
+          buffer.writeln('    choices:');
+          for (final choice in v.choices) {
+            buffer.writeln('      - ${_scalar(choice)}');
+          }
         }
       }
     }
@@ -393,7 +478,7 @@ class Manifest {
   /// Reads an optional boolean field, falling back to [fallback] when absent.
   ///
   /// A cast (`as bool?`) threw `TypeError` for anything else, which no caller
-  /// catches: the CLI handles `FormatException` and exits 1, but a `TypeError`
+  /// catches: a `FormatException` becomes `MANIFEST_INVALID`, but a `TypeError`
   /// escaped as an exit-255 crash with a stack trace. `use_gitignore: yes` is
   /// enough to trigger it — YAML 1.1 spelled booleans that way, and
   /// `package:yaml` is 1.2, where `yes` is the string "yes".
@@ -448,6 +533,8 @@ class Manifest {
       description: (spec['description'] as Object?)?.toString() ?? '',
       defaultValue: (spec['default'] as Object?)?.toString(),
       replaces: (spec['replaces'] as Object?)?.toString(),
+      pattern: (spec['pattern'] as Object?)?.toString(),
+      choices: _stringList(spec['choices']),
     );
   }
 

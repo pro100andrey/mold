@@ -1,3 +1,4 @@
+import '../archive/archive_path.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
@@ -20,13 +21,35 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
   const RenameValidator();
 
   static const collision = 'RENAME_COLLISION';
+  static const unsafePath = 'RENAME_UNSAFE_PATH';
 
   @override
   String get phase => 'rename';
 
   /// Validates the `from` → `to` mapping of every archive entry.
+  ///
+  /// Also checks each destination stays inside the target. `ArchiveValidator`
+  /// checks the paths the archive holds; substitution then rewrites them, and
+  /// a `path_renames` value — rendered from a variable at unpack — can turn a
+  /// contained path into `../x`. Checked here, after substitution, so no
+  /// rename can write outside the target directory.
   @override
   ValidationResult validate(Map<String, String> input) {
+    final unsafe = [
+      for (final MapEntry(key: from, value: to) in input.entries)
+        if (!isContainedArchivePath(to))
+          ValidationError(
+            unsafePath,
+            "Archive entry 'files/$from' is renamed to '$to', which is not a "
+            'contained relative path (traversal, absolute, or '
+            'drive-qualified).',
+            field: from,
+          ),
+    ];
+    if (unsafe.isNotEmpty) {
+      return ValidationResult(unsafe);
+    }
+
     // Two passes so the common case — every destination distinct — allocates
     // one Set rather than a growable List per file. Only destinations that
     // actually collide get a list built for them.

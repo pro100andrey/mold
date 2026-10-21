@@ -39,8 +39,8 @@ Future<void> main() async {
 
     // Unpack under a new name. Substitution happens now.
     final out = '${work.path}/acme_shop';
-    await const Unbundler().unbundleBytes(
-      source: archive,
+    await const Unbundler().unbundle(
+      bytes: archive,
       targetDir: out,
       vars: const {'project_name': 'acme_shop'},
     );

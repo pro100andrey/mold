@@ -1,1 +1,9 @@
 include: package:pro_lints/recommended.yaml
+
+analyzer:
+  # Free to hold to: the code already passed all three when they were turned
+  # on, and each closes a door to a silent `dynamic`.
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true

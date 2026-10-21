@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
+import 'package:mold/src/cli/cli.dart';
 
 /// Entry point for the `mold` CLI (`mold pack` / `mold unpack`). All
 /// command logic lives in `lib/src/cli/cli.dart` so it can be unit-tested
