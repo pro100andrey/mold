@@ -80,8 +80,24 @@ peak memory 546 → ~250–300 MB.
   `PROJECT_PATH_NOT_PORTABLE` ⚠ (case-only pairs, names Windows refuses);
   `RENAME_CASE_COLLISION` ⚠ for case-only pairs renaming creates.
 - The stamp records a SHA-256 per file, and a regeneration flags overwrites
-  that discard edits made since (`UNPACK_OVERWRITES_EDITS`,
-  `PlannedFile.editedSinceStamp`, `UnpackPlan.edited`).
+  that discard content it did not write — edits made since, and the
+  project's own files at paths the template has added since
+  (`UNPACK_OVERWRITES_EDITS`, `PlannedFile.editedSinceStamp`,
+  `UnpackPlan.edited`).
+- Stale files stay in the stamp while they exist, so every regeneration
+  reports them; stamp paths outside the target are ignored; an unreadable
+  stamp warns (`UNPACK_STAMP_INVALID`) instead of failing the unpack.
+- A regeneration compares files the plan found identical instead of
+  rewriting them, leaving their mtimes alone.
+- A stamp at the project root is never packed.
+- **YAML scalars are read as written.** An unquoted `version: 1.10` was read
+  as `1.1`, `007` as `7`, in the manifest's version, defaults and choices
+  and in `--vars-file`. A fix for 0.1.x behaviour too.
+- `--json` reports every failure as JSON — usage errors as `CLI_USAGE`,
+  filesystem failures as `IO_FAILURE` — where some used to print plain text
+  to stderr with stdout empty.
+- An out-of-range `compressionLevel` is a `RangeError` in release builds too;
+  it was only an assert.
 
 The new checks ride existing passes where they can: finding a variable's
 value shares the substitution's scan, and every literal alternation is

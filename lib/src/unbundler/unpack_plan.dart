@@ -67,11 +67,13 @@ class PlannedFile {
   /// the unpack stamp.
   final bool generated;
 
-  /// Whether the file in the target was edited since the unpack recorded in
-  /// the target's stamp — so overwriting it discards those edits.
+  /// Whether overwriting the file in the target discards content the
+  /// stamped unpack did not write: it was edited since, or the stamp does not
+  /// list it at all — a file of the project's own, at a path the template has
+  /// added since.
   ///
-  /// False when there is no stamp, the stamp does not list the file, or the
-  /// overwrite would change nothing.
+  /// False when the target has no stamp, or the overwrite would change
+  /// nothing.
   final bool editedSinceStamp;
 
   /// Whether the path itself changes.
@@ -133,7 +135,7 @@ class UnpackPlan {
   /// Files whose path is free in the target.
   Iterable<PlannedFile> get created => files.where((f) => !f.overwrites);
 
-  /// Overwrites that discard edits made since the last stamped unpack.
+  /// Overwrites that discard content the last stamped unpack did not write.
   Iterable<PlannedFile> get edited => files.where((f) => f.editedSinceStamp);
 
   /// Files that replace one already in the target.

@@ -175,6 +175,36 @@ extra_substitutions:
       );
     });
 
+    test('numbers keep the spelling they were written with', () async {
+      // YAML reads 1.10 as 1.1 and 007 as 7; a vars file is text.
+      write(project, 'mold.yaml', '''
+name: super_server
+version: 1.10
+variables:
+  name:
+    replaces: super_server
+  build:
+    default: "0"
+extra_substitutions:
+  - from: BUILD
+    to: "{{ build }}"
+''');
+      write(project, 'lib/super_server.dart', '// BUILD\n');
+      expect((await mold(['pack', project.path, '-o', archive])).$1, 0);
+      final vars = File(p.join(tmp.path, 'vars.yaml'))
+        ..writeAsStringSync('name: my_app\nbuild: 007\n');
+
+      final (code, _, err) = await mold(unpack(['--vars-file', vars.path]));
+      final (_, _, info) = await mold(['inspect', archive]);
+
+      expect(code, 0, reason: err);
+      expect(
+        File(p.join(target(), 'lib', 'my_app.dart')).readAsStringSync(),
+        '// 007\n',
+      );
+      expect(info, contains('super_server 1.10'));
+    });
+
     test('--var overrides it', () async {
       final vars = File(p.join(tmp.path, 'vars.json'))
         ..writeAsStringSync('{"name": "my_app", "platform": "ios"}');
@@ -305,11 +335,34 @@ variables:
         reason: 'stale files are reported, never deleted',
       );
       expect(readStamp().version, '1.3.0', reason: 'kept up to date');
-      expect(readStamp().files.keys, isNot(contains('lib/my_app.dart')));
+      // Kept, with its old digest, so the next regeneration reports it too.
+      expect(readStamp().files.keys, contains('lib/my_app.dart'));
+      final (_, _, again) = await mold(unpack(['--force']));
+      expect(again, contains(MoldCode.unpackStaleFiles));
     });
 
-    test('a template file named like the stamp collides', () async {
-      write(project, '.mold.json', '{}');
+    test("a project's own stamp is never packed", () async {
+      // A stamped project packed back into a template must not hand its
+      // author's values and history to every later unpack.
+      write(project, '.mold.json', '{"mold_stamp": 1}');
+      expect((await mold(['pack', project.path, '-o', archive])).$1, 0);
+
+      final (_, _, err) = await mold(['inspect', archive, '--files']);
+      expect(err, isNot(contains('.mold.json')));
+      expect((await mold(unpack(['--stamp']))).$1, 0);
+    });
+
+    test('a template file renamed onto the stamp collides', () async {
+      write(project, 'mold.yaml', '''
+name: super_server
+version: 1
+variables:
+  name:
+    replaces: super_server
+path_renames:
+  - from: pubspec.yaml
+    to: .mold.json
+''');
       expect((await mold(['pack', project.path, '-o', archive])).$1, 0);
 
       final (code, _, err) = await mold(unpack(['--stamp']));
@@ -383,6 +436,24 @@ variables:
       expect(
         (doc['errors']! as List<Object?>).single,
         containsPair('code', MoldCode.targetOccupied),
+      );
+    });
+
+    test('a usage error is a JSON document too', () async {
+      final (code, out, err) = await mold([
+        'unpack',
+        archive,
+        '--vars-file',
+        p.join(tmp.path, 'missing.yaml'),
+        '--json',
+      ]);
+      final doc = jsonDecode(out) as Map<String, Object?>;
+
+      expect(code, 64);
+      expect(err, isEmpty);
+      expect(
+        (doc['errors']! as List<Object?>).single,
+        containsPair('code', 'CLI_USAGE'),
       );
     });
 

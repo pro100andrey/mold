@@ -5,6 +5,7 @@ import 'package:yaml/yaml.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import 'manifest_validator.dart';
+import 'yaml_text.dart';
 
 /// One declared rename variable.
 ///
@@ -188,18 +189,18 @@ class Manifest {
     _collectUnknown(doc, unknown);
 
     return Manifest(
-      name: _optionalString(doc['name']),
-      version: _optionalString(doc['version']),
-      include: _stringList(doc['include']),
-      exclude: _stringList(doc['exclude']),
+      name: textAt(doc, 'name') ?? '',
+      version: textAt(doc, 'version') ?? '',
+      include: _stringList(doc.nodes['include']),
+      exclude: _stringList(doc.nodes['exclude']),
       variables: _variables(doc['variables']),
       extraSubstitutions: _substitutions(
         doc['extra_substitutions'],
         'extra_substitutions',
       ),
       pathRenames: _substitutions(doc['path_renames'], 'path_renames'),
-      noSubstitute: _stringList(doc['no_substitute']),
-      binaryExtensions: _stringList(doc['binary_extensions']),
+      noSubstitute: _stringList(doc.nodes['no_substitute']),
+      binaryExtensions: _stringList(doc.nodes['binary_extensions']),
       useGitignore: _bool(doc['use_gitignore'], 'use_gitignore', true),
       source: text,
       path: path,
@@ -580,11 +581,6 @@ class Manifest {
     return '"$escaped"';
   }
 
-  /// Reads an optional scalar as a string; missing → empty. Required-field
-  /// enforcement is the `ManifestValidator`'s job, so parsing stays lenient.
-  static String _optionalString(Object? value) =>
-      value == null ? '' : value.toString();
-
   /// Reads an optional boolean field, falling back to [fallback] when absent.
   ///
   /// A cast (`as bool?`) threw `TypeError` for anything else, which no caller
@@ -606,16 +602,18 @@ class Manifest {
     return value;
   }
 
-  static List<String> _stringList(Object? value) {
-    if (value == null) {
+  static List<String> _stringList(YamlNode? node) {
+    if (node == null || node.value == null) {
       return const [];
     }
 
-    if (value is! YamlList) {
-      throw FormatException('Expected a list but got: $value');
+    if (node is! YamlList) {
+      throw FormatException('Expected a list but got: ${node.value}');
     }
 
-    return value.map((e) => e.toString()).toList(growable: false);
+    return [
+      for (final item in node.nodes) nodeText(item) ?? '',
+    ].toList(growable: false);
   }
 
   static List<TemplateVariable> _variables(Object? value) {
@@ -640,11 +638,11 @@ class Manifest {
 
     return TemplateVariable(
       name: name,
-      description: (spec['description'] as Object?)?.toString() ?? '',
-      defaultValue: (spec['default'] as Object?)?.toString(),
-      replaces: (spec['replaces'] as Object?)?.toString(),
-      pattern: (spec['pattern'] as Object?)?.toString(),
-      choices: _stringList(spec['choices']),
+      description: textAt(spec, 'description') ?? '',
+      defaultValue: textAt(spec, 'default'),
+      replaces: textAt(spec, 'replaces'),
+      pattern: textAt(spec, 'pattern'),
+      choices: _stringList(spec.nodes['choices']),
     );
   }
 
@@ -666,8 +664,8 @@ class Manifest {
       throw FormatException('Each $key entry must be a mapping with from/to.');
     }
 
-    final from = item['from'];
-    final to = item['to'];
+    final from = textAt(item, 'from');
+    final to = textAt(item, 'to');
     if (from is! String || from.isEmpty) {
       throw FormatException("A $key entry needs a non-empty 'from'.");
     }

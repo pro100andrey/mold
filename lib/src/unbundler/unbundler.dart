@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
+import '../archive/archive_path.dart';
 import '../archive/archive_reader.dart';
 import '../archive/archive_validator.dart';
 import '../manifest/content_policy.dart';
@@ -206,6 +207,14 @@ class Unbundler {
     // can be replaced and there is nothing to look at.
     final inspect = overwrite ? targetDir : null;
     final previous = inspect == null ? null : _readStamp(inspect, onWarning);
+    // Only paths inside the target. A stamp is a file anyone can edit, and
+    // one listing `../x` or `/etc/hosts` must not have mold look there, let
+    // alone report it as a file of the project's.
+    final previousFiles = <String, String>{
+      for (final MapEntry(:key, :value)
+          in previous?.files.entries ?? const <MapEntry<String, String>>[])
+        if (isContainedArchivePath(key)) key: value,
+    };
     final writeStamp = targetDir != null && (stamp || previous != null);
 
     final rules = _Rules(manifest, resolved);
@@ -234,7 +243,9 @@ class Unbundler {
           executable: archive.executable.contains(from),
           withContent: withContent,
           existing: existing(renames[from]!),
-          stamped: previous?.files[renames[from]],
+          stamped: previous == null
+              ? null
+              : (previousFiles[renames[from]] ?? _untracked),
           presence: presence,
         ),
     ];
@@ -244,24 +255,51 @@ class Unbundler {
     final written = {for (final f in files) f.to};
     final edited = [
       for (final f in files)
-        if (f.editedSinceStamp) f.to,
+        if (f.editedSinceStamp && previousFiles.containsKey(f.to)) f.to,
     ];
-    if (edited.isNotEmpty) {
+    final untracked = [
+      for (final f in files)
+        if (f.editedSinceStamp && !previousFiles.containsKey(f.to)) f.to,
+    ];
+    if (edited.isNotEmpty || untracked.isNotEmpty) {
+      final editedReason =
+          '${edited.length} file(s) were edited since the last unpack: '
+          '${edited.join(', ')}';
+      final untrackedReason =
+          '${untracked.length} file(s) were never written by it — the '
+          "template added them since, over the project's own: "
+          '${untracked.join(', ')}';
+      final reasons = [
+        if (edited.isNotEmpty) editedReason,
+        if (untracked.isNotEmpty) untrackedReason,
+      ];
       onWarning?.call(
         ValidationError.warning(
           overwritesEdits,
-          '${edited.length} file(s) were edited since the last unpack, and '
-          'this one overwrites them: ${edited.join(', ')}',
+          '${reasons.join('; and ')}. This unpack overwrites them.',
         ),
       );
     }
+    // Stale files stay in the stamp, with the digest they were written with,
+    // for as long as they are there: dropping them would report a leftover
+    // once and then never again, while it is still in the project.
+    final stale = [
+      for (final path in previousFiles.keys)
+        if (!written.contains(path) &&
+            File(p.join(inspect!, path)).existsSync())
+          path,
+    ];
     if (writeStamp) {
-      final sorted = [...files]..sort((a, b) => a.to.compareTo(b.to));
       final record = UnpackStamp(
         template: manifest.name,
         version: manifest.version,
         vars: resolved,
-        files: {for (final f in sorted) f.to: UnpackStamp.digest(f.bytes)},
+        files: Map.fromEntries(
+          [
+            for (final f in files) MapEntry(f.to, UnpackStamp.digest(f.bytes)),
+            for (final path in stale) MapEntry(path, previousFiles[path]!),
+          ]..sort((a, b) => a.key.compareTo(b.key)),
+        ),
       );
       files.add(
         _planGenerated(
@@ -279,14 +317,13 @@ class Unbundler {
       values: resolved,
       targetDir: targetDir,
       overwrite: overwrite,
-      stale: [
-        for (final path in previous?.files.keys ?? const <String>[])
-          if (!written.contains(path) &&
-              File(p.join(inspect!, path)).existsSync())
-            path,
-      ],
+      stale: stale,
     );
   }
+
+  /// What `stamped` is for a file a stamp exists but does not list: a digest
+  /// no bytes have, so any file found there counts as not mold's.
+  static const _untracked = '';
 
   /// The key the stamp takes in the rename mapping — not a legal archive
   /// path, so no entry can share it.
@@ -302,7 +339,13 @@ class Unbundler {
     if (!file.existsSync()) {
       return null;
     }
-    final stamp = UnpackStamp.tryParse(file.readAsStringSync());
+    UnpackStamp? stamp;
+    try {
+      stamp = UnpackStamp.tryParse(file.readAsStringSync());
+    } on FileSystemException {
+      // Unreadable, or not UTF-8 — not a stamp either way, and not a reason
+      // to abandon the unpack.
+    }
     if (stamp == null) {
       onWarning?.call(
         ValidationError.warning(
@@ -378,6 +421,8 @@ class Unbundler {
     required bool executable,
     required bool withContent,
     required File? existing,
+    // The digest the target's stamp records for [to]: null with no stamp,
+    // [_untracked] when the stamp does not list it.
     required String? stamped,
     required _Presence presence,
   }) {
@@ -481,16 +526,29 @@ class Unbundler {
         // permutes arguments, so a target directory named `-out` would make
         // `chmod +x -out/x.sh` parse as flags and fail for the whole batch.
         final out = File(p.absolute(p.join(root.path, file.to)));
+        if (file.executable) {
+          restoreExecutable.add(out.path);
+        }
+
+        // A file the plan found identical is compared, not rewritten:
+        // rewriting it changes nothing but its mtime, and on a regeneration
+        // that is most of the project — every build cache invalidated, every
+        // file watcher woken. Compared again here because the plan may be
+        // old; what was read doubles as the undo's copy.
+        List<int>? current;
+        if (file.identicalToExisting && out.existsSync()) {
+          current = out.readAsBytesSync();
+          if (sameBytes(current, file.bytes)) {
+            continue;
+          }
+        }
+
         // Recorded before the write, so a write that fails halfway — a
         // truncated file — is undone too.
         undo
           ..createParents(out.parent)
-          ..recordWrite(out);
+          ..recordWrite(out, current: current);
         out.writeAsBytesSync(file.bytes);
-
-        if (file.executable) {
-          restoreExecutable.add(out.path);
-        }
       }
     } on Object {
       // A half-written project is worse than none: it is not runnable, and it
@@ -618,9 +676,13 @@ class _Undo {
   ///
   /// The bytes are held in memory. They are at most one file per archive
   /// entry, and the archive itself is already held in memory whole.
-  void recordWrite(File file) {
+  ///
+  /// [current] is the file's content when the caller has just read it.
+  void recordWrite(File file, {List<int>? current}) {
     // Into a directory this unpack created, nothing can be there yet.
-    if (_preexisting && file.existsSync()) {
+    if (current != null) {
+      _replaced.putIfAbsent(file.path, () => current);
+    } else if (_preexisting && file.existsSync()) {
       _replaced.putIfAbsent(file.path, file.readAsBytesSync);
     } else {
       _created.add(file);
@@ -685,7 +747,6 @@ class _Presence {
     _Rules rules,
   ) {
     const converter = CaseConverter();
-    final paths = rules.pathSubstitutor.keys.toSet();
     final needles = <String, (CasingNeedle, String, String)>{};
     for (final variable in manifest.variables) {
       final replaces = variable.replaces;
@@ -711,11 +772,11 @@ class _Presence {
     return _Presence._(
       needles,
       rules.contentSubstitutor.watching(needles.keys),
-      Substitutor.alternation({...paths, ...needles.keys}),
+      rules.pathSubstitutor.watching(needles.keys),
     );
   }
 
-  _Presence._(this._needles, this._content, this._pathPattern);
+  _Presence._(this._needles, this._content, this._paths);
 
   /// Value casing → its rule, its variable, and the token casing that turns
   /// into it.
@@ -724,21 +785,20 @@ class _Presence {
   /// The content substitution, watching for the value casings — so finding
   /// them rides on the substitution's own scan instead of a second one.
   final Watching _content;
-  final RegExp? _pathPattern;
+
+  /// The same for paths, so a path a rename rewrites is not reported — the
+  /// content and path checks decide alike.
+  final Watching _paths;
 
   /// Value casing → the files holding it, once per occurrence.
   final Map<String, List<String>> _found = {};
 
   /// Searches the archive path [from].
-  ///
-  /// Paths are short, so a separate pass costs nothing worth sharing.
   void scanPath(String from) {
-    final pattern = _pathPattern;
-    if (_needles.isEmpty || pattern == null) {
-      return;
-    }
-    for (final m in pattern.allMatches(from)) {
-      _hit(from, m[0]!, m.start, from);
+    if (_needles.isNotEmpty) {
+      _paths.applyCounted(from, (found, start) {
+        _hit(from, found, start, from);
+      });
     }
   }
 

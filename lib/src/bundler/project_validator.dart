@@ -9,6 +9,7 @@ import '../unbundler/case_converter.dart';
 import '../unbundler/case_transform.dart';
 import '../unbundler/casing_needle.dart';
 import '../unbundler/substitutor.dart';
+import '../unbundler/unpack_stamp.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
@@ -143,10 +144,16 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   /// The one place that maps a manifest onto a [FileScanner], so the validator,
   /// the bundler and `pack --dry-run` cannot end up filtering differently — a
   /// divergence would mean validating one set of files and packing another.
+  ///
+  /// An unpack stamp at the root is never packed. It records one unpack into
+  /// one directory — its values, its files, their digests — so a template
+  /// carrying its author's would hand every later unpack the author's values
+  /// and make it judge stale and edited files by the author's history.
   static ScanResult scanFor(String dir, Manifest manifest) => FileScanner(
     include: manifest.include,
     exclude: manifest.exclude,
     useGitignore: manifest.useGitignore,
+    reserved: const {UnpackStamp.fileName},
   ).scan(dir);
 
   @override

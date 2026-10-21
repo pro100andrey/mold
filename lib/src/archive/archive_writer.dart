@@ -21,16 +21,13 @@ import 'package:archive/archive.dart';
 /// corpus at the default level. [compressionLevel] trades it for size; the
 /// archive stays reproducible at any one level.
 class ArchiveWriter {
-  const ArchiveWriter({this.compressionLevel = defaultLevel})
-    : assert(
-        compressionLevel >= 0 && compressionLevel <= 9,
-        'compressionLevel is 0..9',
-      );
+  const ArchiveWriter({this.compressionLevel = defaultLevel});
 
   /// zlib's own default, a balance of speed and size.
   static const defaultLevel = 6;
 
-  /// The gzip level, 0 (store) to 9 (smallest).
+  /// The gzip level, 0 (store) to 9 (smallest). Anything else is a
+  /// [RangeError] from [write].
   final int compressionLevel;
 
   /// Tar mode for a regular file, and for one that is owner-executable.
@@ -73,6 +70,9 @@ class ArchiveWriter {
       );
     }
 
+    // Checked here, not by an assert in the const constructor: release builds
+    // drop asserts, and an out-of-range level would reach the encoder.
+    RangeError.checkValueInInterval(compressionLevel, 0, 9, 'compressionLevel');
     final tar = TarEncoder().encode(archive);
 
     return const GZipEncoder().encodeBytes(tar, level: compressionLevel);

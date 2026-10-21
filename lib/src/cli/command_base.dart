@@ -5,6 +5,7 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:yaml/yaml.dart';
 
+import '../manifest/yaml_text.dart';
 import '../unbundler/unpack_stamp.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
@@ -68,13 +69,19 @@ abstract class MoldCommand extends Command<int> {
   /// The command body; [run] maps what it throws to exit codes.
   Future<int> execute(ArgResults results);
 
+  /// The code of a usage error in a `--json` document — bad arguments, a
+  /// missing vars file — which carries no library code of its own.
+  static const usageCode = 'CLI_USAGE';
+
+  /// The code of a filesystem failure in a `--json` document.
+  static const ioCode = 'IO_FAILURE';
+
   @override
   Future<int> run() async {
     try {
       return await execute(argResults!);
     } on CliException catch (e) {
-      err.writeln(e.message);
-      return 64;
+      return _fail(usageCode, e.message, 64);
     } on ValidationException catch (e) {
       if (wantsJson) {
         emitJson({
@@ -85,9 +92,27 @@ abstract class MoldCommand extends Command<int> {
       }
       return 1;
     } on FormatException catch (e) {
-      err.writeln(e.message);
-      return 1;
+      return _fail(usageCode, e.message, 1);
+    } on IOException catch (e) {
+      // Here as well as in the runner, so a --json run reports it as JSON.
+      return _fail(ioCode, e.toString(), 1);
     }
+  }
+
+  /// Reports a failure that is not a [ValidationException]: as text, or under
+  /// `--json` as an `errors` document, so stdout is JSON whatever went wrong.
+  int _fail(String code, String message, int exitCode) {
+    if (wantsJson) {
+      emitJson({
+        'errors': [
+          {'code': code, 'severity': 'error', 'message': message},
+        ],
+      });
+    } else {
+      err.writeln(message);
+    }
+
+    return exitCode;
   }
 
   /// The `--var` and `--vars-file` values of [results], merged.
@@ -179,12 +204,13 @@ Map<String, String> readVarsFile(String path) {
   }
 
   return {
-    for (final MapEntry(:key, :value) in doc.entries)
-      '$key': switch (value) {
-        String() || num() || bool() => '$value',
-        _ => throw CliException(
-          "Vars file $path: '$key' must be a single value, not $value.",
-        ),
-      },
+    for (final MapEntry(:key, value: node) in doc.nodes.entries)
+      '${nodeText(key as YamlNode)}': node is YamlScalar && node.value != null
+          // As written: `1.10` stays `1.10`, `007` stays `007`.
+          ? nodeText(node)!
+          : throw CliException(
+              "Vars file $path: '${nodeText(key)}' must be a single value, "
+              'not ${node.value}.',
+            ),
   };
 }

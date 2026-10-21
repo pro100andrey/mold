@@ -170,7 +170,9 @@ directory can sit on another filesystem, where a rename is a copy.
 Human-facing output goes to stderr; stdout carries only `--json` documents.
 Under `--json`, warnings are part of the document, and a failure is a document
 too — `{"errors": [{"code": …, "message": …}], "warnings": […]}` with exit 1 —
-so a tool reading stdout always gets JSON.
+so a tool reading stdout always gets JSON. Failures that carry no library code
+use `CLI_USAGE` (bad arguments, a missing vars file — exit 64) and
+`IO_FAILURE` (exit 1).
 
 ### Inspecting a template
 
@@ -209,12 +211,20 @@ mold unpack app.mold -t ./my_app --force --vars-file ./my_app/.mold.json --dry-r
 remembering what was typed the first time. The stamp also records a SHA-256 of
 every file it wrote, which tells a regeneration two things:
 
-- which files it is about to overwrite were **edited** since —
-  `UNPACK_OVERWRITES_EDITS`, listed under "Edited since the last unpack" in a
-  dry run, so `--force` no longer discards work without a word;
+- which files it is about to overwrite hold content it did not write — edited
+  since, or never written by it at all (the project's own file, at a path the
+  template has added since) — `UNPACK_OVERWRITES_EDITS`, listed in a dry run,
+  so `--force` no longer discards work without a word;
 - which files the template has since **dropped** — listed under "No longer in
   the template", reported as `UNPACK_STALE_FILES`, and left in place: never
-  deleted, since they may have been edited.
+  deleted, since they may have been edited. They stay in the stamp while they
+  exist, so every regeneration reports them, not just the first.
+
+A regeneration rewrites only files that change: one identical to what is
+there is compared, not written, so mtimes — and build caches and file
+watchers — are left alone. A stamp at a project's root is never packed into a
+template: it describes one unpack into one directory, and would hand every
+later unpack its author's values and history.
 
 `--vars-file` also takes a plain YAML or JSON map of values. `--var` applies
 over it; a key the template does not declare is `VARIABLE_UNKNOWN`, as for
@@ -252,6 +262,10 @@ path_renames: []            # from/to, applied to PATHS only
 no_substitute: []           # globs; content untouched, path still renamed
 binary_extensions: []       # extra extensions treated as binary
 ```
+
+Values are read as written: an unquoted `version: 1.10` is `1.10`, not the
+number YAML would make of it (`1.1`), and `007` stays `007` — in the manifest
+and in `--vars-file` alike.
 
 A key the format does not define is ignored, but never silently: it warns as
 `MANIFEST_UNKNOWN_KEY`, with the key it probably means — `excludes` → did you
