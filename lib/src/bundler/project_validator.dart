@@ -10,6 +10,7 @@ import '../unbundler/case_transform.dart';
 import '../unbundler/casing_needle.dart';
 import '../unbundler/substitutor.dart';
 import '../unbundler/unpack_stamp.dart';
+import '../util/sample.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
@@ -216,7 +217,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
             tokenInVerbatim,
             "Variable '$name': token '$token' occurs in ${verbatim.length} "
             'file(s) copied verbatim, which keep it as it is: '
-            '${_sample(verbatim)}. Their paths are still renamed; their '
+            '${sample(verbatim)}. Their paths are still renamed; their '
             'content is not (binary_extensions, no_substitute, or not UTF-8).',
             field: name,
           ),
@@ -308,7 +309,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       ..sort((a, b) => b.value.length.compareTo(a.value.length));
     final listed = [
       for (final MapEntry(key: spelling, value: files) in spellings)
-        "'$spelling' (${files.length}: ${_sample(files.toSet().toList())})",
+        "'$spelling' (${files.length}: ${sample(files.toSet())})",
     ].join(', ');
 
     final entries = <String>[];
@@ -337,15 +338,6 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
                 '${unmatched.join(', ')}; give each a literal entry.'}',
       field: name,
     );
-  }
-
-  /// The first few of [paths], for a message.
-  static String _sample(List<String> paths, [int limit = 3]) {
-    final shown = paths.take(limit).join(', ');
-
-    return paths.length > limit
-        ? '$shown and ${paths.length - limit} more'
-        : shown;
   }
 
   /// Runs [search] over every packed path and every substituted text, the

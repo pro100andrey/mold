@@ -10,6 +10,7 @@ class VariablesInput {
     required this.variables,
     required this.values,
     this.explicit = const {},
+    this.recorded = const {},
   });
 
   /// The manifest's declared variables.
@@ -24,6 +25,14 @@ class VariablesInput {
   /// declared variable, so by then a typo is indistinguishable from never
   /// having been passed.
   final Map<String, String> explicit;
+
+  /// The values a previous unpack recorded (an `UnpackStamp`'s), used where
+  /// [explicit] has none.
+  ///
+  /// Unlike [explicit], a name here the template does not declare is not a
+  /// mistake: the template has dropped or renamed the variable since. It is
+  /// reported, and the value is not used.
+  final Map<String, String> recorded;
 }
 
 /// Validates resolved variables (unbundle phase): every required variable has a
@@ -37,6 +46,9 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
   static const unknown = 'VARIABLE_UNKNOWN';
   static const patternMismatch = 'VARIABLE_PATTERN_MISMATCH';
   static const notAChoice = 'VARIABLE_NOT_A_CHOICE';
+
+  /// A warning: [VariablesInput.recorded] names a variable that is gone.
+  static const dropped = 'VARIABLE_DROPPED';
 
   /// Raised while planning, not by [validate]: finding it needs the
   /// template's content.
@@ -67,6 +79,19 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
             unknown,
             "No variable '$name' is declared by this template. "
             'Declared: $known.',
+            field: name,
+          ),
+        );
+      }
+    }
+
+    for (final name in input.recorded.keys) {
+      if (!declared.contains(name) && !input.explicit.containsKey(name)) {
+        issues.add(
+          ValidationError.warning(
+            dropped,
+            "The recorded value of '$name' is not used: this template no "
+            'longer declares it. Declared: $known.',
             field: name,
           ),
         );

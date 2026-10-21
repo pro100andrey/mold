@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:yaml/yaml.dart';
@@ -220,7 +221,10 @@ class Manifest {
       ]);
     }
 
-    return .fromYaml(file.readAsStringSync(), path: path);
+    return .fromYaml(
+      decodeManifestText(file.readAsBytesSync(), path),
+      path: path,
+    );
   }
 
   /// The keys a manifest may hold, at its top level.
@@ -675,5 +679,23 @@ class Manifest {
     }
 
     return Substitution(from: from, to: to);
+  }
+}
+
+/// The text of a manifest's bytes, read from [where].
+///
+/// Bytes that are not UTF-8 are `MANIFEST_INVALID`, like text that is not
+/// YAML, rather than the bare [FormatException] `utf8.decode` throws — which
+/// no caller handling [ValidationException] would catch.
+String decodeManifestText(List<int> bytes, String where) {
+  try {
+    return utf8.decode(bytes);
+  } on FormatException {
+    throw ValidationException([
+      ValidationError(
+        ManifestValidator.invalid,
+        '$where: not UTF-8 text.',
+      ),
+    ]);
   }
 }

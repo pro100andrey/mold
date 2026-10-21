@@ -5,7 +5,7 @@ import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
 
 /// Validates the planned path renames (unpack phase): no two archive entries
-/// may land on the same path.
+/// may land on the same path, or one inside the other.
 ///
 /// Substitution rewrites paths, and nothing stops two distinct entries from
 /// being rewritten to one destination — a `path_renames` pair pointing at the
@@ -76,8 +76,23 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
             field: group.first,
           ),
     ];
+    // A file landing where another needs a directory: `lib/app` and
+    // `lib/app/x.dart`, as a `path_renames` of `app_dir` → `app` makes them.
+    // Only one of the two can be created; without this the unpack found out
+    // halfway through writing.
+    final nested = [
+      for (final MapEntry(key: from, value: to) in input.entries)
+        if (_fileAbove(to, seen) case final file?)
+          ValidationError(
+            collision,
+            "Archive entry 'files/$from' would be written to '$to', inside "
+            "'$file' — which is a file of the template too. Give one of them "
+            'another name, or use path_renames to pin it.',
+            field: to,
+          ),
+    ];
     if (collided.isEmpty) {
-      return ValidationResult(caseIssues);
+      return ValidationResult([...caseIssues, ...nested]);
     }
 
     // Insertion-ordered, so the message lists the sources in archive order and
@@ -91,6 +106,7 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
 
     return ValidationResult([
       ...caseIssues,
+      ...nested,
       for (final entry in sources.entries)
         ValidationError(
           collision,
@@ -101,5 +117,17 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
           field: entry.key,
         ),
     ]);
+  }
+
+  /// The first ancestor of [path] that is itself in [destinations], if any.
+  static String? _fileAbove(String path, Set<String> destinations) {
+    for (var i = path.indexOf('/'); i != -1; i = path.indexOf('/', i + 1)) {
+      final ancestor = path.substring(0, i);
+      if (destinations.contains(ancestor)) {
+        return ancestor;
+      }
+    }
+
+    return null;
   }
 }

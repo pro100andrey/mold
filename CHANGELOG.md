@@ -75,7 +75,9 @@ whole-file diff.
   from inside the Dart source, for embed formats — and compares manifest,
   files and executable bits, naming what changed. It used to compare
   compressed bytes, so another OS, SDK or `--level` reported a current file
-  as stale.
+  as stale. Nothing is compressed for it — the project's files are compared
+  as read (2.5 s → 0.7 s on 48 MB) — and an embed source checked out with
+  CRLF, as Git for Windows does by default, is current.
 
 ### Sharper checks
 
@@ -121,6 +123,18 @@ whole-file diff.
   to stderr with stdout empty.
 - An out-of-range `compressionLevel` is a `RangeError` in release builds too;
   it was only an assert.
+- `RENAME_COLLISION` also covers a file renamed to where another file needs a
+  directory (`lib/app` and `lib/app_dir/x.dart` under `app_dir` → `app`),
+  which used to fail halfway through writing as an `IOException`.
+- A `mold.yaml` that is not UTF-8 is `MANIFEST_INVALID`, in an archive or a
+  file, rather than a bare `FormatException` / `FileSystemException`.
+- `pack --diff` reports what an unpack would warn about —
+  `VARIABLE_VALUE_PRESENT`, `RENAME_CASE_COLLISION` — each warning once. It
+  used to drop every warning of the planning step.
+- A pack meeting an unreadable file reports the project's warnings before
+  failing, not instead of them.
+- A stale path the regeneration writes under another casing — the same file
+  on macOS and Windows — is no longer reported stale.
 
 The new checks ride existing passes where they can: finding a variable's
 value shares the substitution's scan, and every literal alternation is
@@ -134,6 +148,11 @@ about 130 ms more on the corpus above.
   and `choices:` (the only values allowed, shown by the prompt), enforced as
   `VARIABLE_PATTERN_MISMATCH` / `VARIABLE_NOT_A_CHOICE`; a pattern that does
   not compile or a default they reject is caught at pack.
+- **Recorded values** (`plan(recorded: …)`, and what `--vars-file .mold.json`
+  passes): a stamp's values fill the variables after `vars` and before the
+  resolver, and one naming a variable the template has dropped is
+  `VARIABLE_DROPPED` ⚠, not `VARIABLE_UNKNOWN`. A regeneration from a stamp
+  used to fail on the template's first change to its variables.
 - **`mold inspect <archive>`** (`Unbundler.inspect`): the manifest, variables,
   substitutions and — with `--files` — the files, without unpacking.
 - **`mold pack … --check`**: exit 1 when the committed archive or embed source

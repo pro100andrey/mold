@@ -15,7 +15,7 @@ import '../output/embed_source.dart';
 import '../output/output_format.dart';
 import '../prompt/variable_resolver.dart';
 import '../unbundler/unbundler.dart';
-import '../util/bytes.dart';
+import '../validation/validation_error.dart';
 import 'command_base.dart';
 import 'plan_report.dart';
 
@@ -114,7 +114,7 @@ class PackCommand extends MoldCommand {
       return _previewPack(sourceDir, manifest, packVars);
     }
 
-    if (packVars.isNotEmpty) {
+    if (packVars.vars.isNotEmpty || packVars.recorded.isNotEmpty) {
       // Packing substitutes nothing, so a value passed here can only be for
       // the preview. Silently dropping it would leave the user believing it
       // took effect.
@@ -128,23 +128,28 @@ class PackCommand extends MoldCommand {
       return _dryRunPack(sourceDir, manifest);
     }
 
-    final archive = await Bundler(
-      compressionLevel: level,
-      fastCompression: results['fast'] as bool,
-    ).bundle(projectDir: sourceDir, manifest: manifest, onWarning: warn);
     // One stem drives both the file name and the generated const identifier;
     // rendering from manifest.name here would make `-n foo` write foo.dart
     // declaring kDemoTemplate.
     final stem = (results['name'] as String?) ?? manifest.name;
-    final content = _render(format, archive, stem);
-
     final ext = format == OutputFormat.tarGz ? 'mold' : 'dart';
     final outputPath = (results['output'] as String?) ?? './$stem.$ext';
 
     if (check) {
-      return _check(outputPath, format, stem, archive);
+      // Compared by content, so nothing needs compressing.
+      final current = collectBundle(
+        projectDir: sourceDir,
+        manifest: manifest,
+        onWarning: warn,
+      );
+      return _check(outputPath, format, stem, current);
     }
 
+    final archive = await Bundler(
+      compressionLevel: level,
+      fastCompression: results['fast'] as bool,
+    ).bundle(projectDir: sourceDir, manifest: manifest, onWarning: warn);
+    final content = _render(format, archive, stem);
     File(outputPath)
       ..parent.createSync(recursive: true)
       ..writeAsBytesSync(content);
@@ -162,7 +167,7 @@ class PackCommand extends MoldCommand {
   ///
   /// Compared by content, not by bytes. The archive is unpacked from the
   /// committed file — from inside the Dart source, for an embed format — and
-  /// its manifest, files and executable bits compared with [archive]'s. A
+  /// its manifest, files and executable bits compared with [current]. A
   /// byte comparison failed whenever the compressor differed while the
   /// content did not: another OS, another Dart SDK, another `--level`.
   ///
@@ -173,9 +178,9 @@ class PackCommand extends MoldCommand {
     String outputPath,
     OutputFormat format,
     String stem,
-    List<int> archive,
+    BundleArchive current,
   ) {
-    final reasons = _staleness(outputPath, format, stem, archive);
+    final reasons = _staleness(outputPath, format, stem, current);
     final upToDate = reasons.isEmpty;
 
     if (wantsJson) {
@@ -197,7 +202,7 @@ class PackCommand extends MoldCommand {
     String outputPath,
     OutputFormat format,
     String stem,
-    List<int> archive,
+    BundleArchive current,
   ) {
     final file = File(outputPath);
     if (!file.existsSync()) {
@@ -221,7 +226,10 @@ class PackCommand extends MoldCommand {
         return ['it holds no ${format.flag} archive mold would write'];
       }
       committed = embedded;
-      if (!sameBytes(_render(format, embedded, stem), bytes)) {
+      // As text with LF endings: a Windows checkout turns a committed source's
+      // LF into CRLF (core.autocrlf), which is not a change to it.
+      final rendered = utf8.decode(_render(format, embedded, stem));
+      if (text.replaceAll('\r\n', '\n') != rendered) {
         reasons.add(
           'the source around the archive differs (its name, layout or the '
           'mold version that wrote it)',
@@ -235,7 +243,7 @@ class PackCommand extends MoldCommand {
     }
     final diff = ArchiveDiff(
       const ArchiveReader().fromTar(inspected.tar!),
-      const ArchiveReader().read(archive),
+      current,
     );
 
     return [...reasons, ...diff.describe()];
@@ -299,20 +307,30 @@ class PackCommand extends MoldCommand {
   Future<int> _previewPack(
     String sourceDir,
     Manifest manifest,
-    Map<String, String> vars,
+    ({Map<String, String> vars, Map<String, String> recorded}) values,
   ) async {
+    // Packing and planning both validate the manifest, so its warnings come
+    // twice; each is reported once. Dropping the planner's warnings instead
+    // hid the ones only an unpack raises — a value already in the template, a
+    // rename differing only in case — from the preview meant to show them.
+    final seen = <String>{};
+    void warnOnce(ValidationError w) {
+      if (seen.add('${w.code}\u0000${w.field}\u0000${w.message}')) {
+        warn(w);
+      }
+    }
+
     final archive = await const Bundler().bundle(
       projectDir: sourceDir,
       manifest: manifest,
-      onWarning: warn,
+      onWarning: warnOnce,
     );
-    // No onWarning here, deliberately: `bundle` above already ran the manifest
-    // phase and reported it. Passing one would print every manifest warning
-    // twice, because the planner validates the same manifest a second time.
     final plan = const Unbundler().plan(
       bytes: archive,
-      vars: vars,
+      vars: values.vars,
+      recorded: values.recorded,
       resolver: const VariableResolver(noPrompt: true),
+      onWarning: warnOnce,
     );
 
     if (wantsJson) {

@@ -199,7 +199,13 @@ files and executable bits compared with the project's. Compressed bytes are
 not compared, so a file written on another OS, by another Dart SDK, at another
 `--level` or with `--fast` is not called stale when its content is current.
 An embed source must also be exactly what this mold renders around its
-archive, so a changed `-n` or a newer mold's layout is stale too.
+archive, so a changed `-n` or a newer mold's layout is stale too. Line endings
+are not a change: a source committed with LF and checked out with CRLF — Git
+for Windows' default — is current.
+
+Nothing is compressed for the check: the project's files are compared with the
+committed archive's as they are read. On a 48 MB project it takes 0.7 s, a
+third of a pack.
 
 ### Reproducible archives
 
@@ -230,7 +236,10 @@ mold unpack app.mold -t ./my_app --force --vars-file ./my_app/.mold.json --dry-r
 ```
 
 `--vars-file` takes the stamp's values, so a regeneration does not depend on
-remembering what was typed the first time. The stamp also records a SHA-256 of
+remembering what was typed the first time; `--var` still overrides any of
+them. A variable the template has dropped since is `VARIABLE_DROPPED` ⚠ — its
+value is not used — rather than an error that would make the stamp useless
+after the first change to the template's variables. The stamp also records a SHA-256 of
 every file it wrote, which tells a regeneration two things:
 
 - which files it is about to overwrite hold content it did not write — edited
@@ -250,7 +259,8 @@ later unpack its author's values and history.
 
 `--vars-file` also takes a plain YAML or JSON map of values. `--var` applies
 over it; a key the template does not declare is `VARIABLE_UNKNOWN`, as for
-`--var`.
+`--var` — a map is typed by hand, so an unknown key there is more likely a
+typo than a dropped variable.
 
 ---
 
@@ -681,7 +691,7 @@ stderr.
 | pack   | `MANIFEST_INVALID_PATTERN`          | a variable's `pattern` does not compile        |
 | pack   | `MANIFEST_INVALID_DEFAULT`          | a default its own constraints reject           |
 | pack   | `MANIFEST_UNKNOWN_KEY` ⚠            | a key the format does not define               |
-| both   | `MANIFEST_INVALID`                  | not YAML, or not shaped like a manifest        |
+| both   | `MANIFEST_INVALID`                  | not UTF-8 YAML, or not shaped like a manifest  |
 | both   | `MANIFEST_NOT_FOUND`                | no manifest file at the path                   |
 | pack   | `PROJECT_DIR_NOT_FOUND`             | source directory missing                       |
 | pack   | `PROJECT_DIR_EMPTY`                 | nothing to pack after filtering                |
@@ -710,7 +720,8 @@ stderr.
 | unpack | `VARIABLE_PATTERN_MISMATCH`         | value does not match the variable's `pattern`  |
 | unpack | `VARIABLE_NOT_A_CHOICE`             | value is not one of the variable's `choices`   |
 | unpack | `VARIABLE_VALUE_PRESENT` ⚠          | the value already occurs in the template       |
-| unpack | `RENAME_COLLISION`                  | two entries would land on the same path        |
+| unpack | `VARIABLE_DROPPED` ⚠                | a stamped value names a variable now gone      |
+| unpack | `RENAME_COLLISION`                  | two entries on one path, or a file under one   |
 | unpack | `TARGET_PATH_CONFLICT`              | `--force`: a path is blocked in the target     |
 | unpack | `RENAME_UNSAFE_PATH`                | a renamed path escapes the target              |
 | unpack | `RENAME_CASE_COLLISION` ⚠           | renamed paths differ only in case              |
@@ -836,6 +847,23 @@ target, whether that file is `identicalToExisting`, and its `existing` text.
 `plan.created`, `plan.overwritten` and `plan.stale` split the files; a plan
 also carries the `manifest` and the resolved `values`. A plan made with no
 `targetDir` previews substitution only and cannot be applied.
+
+To regenerate a project from its stamp, pass the stamp's values as
+`recorded`. They come after `vars` and before the resolver, and one naming a
+variable the template has dropped is a `VARIABLE_DROPPED` warning, not the
+`VARIABLE_UNKNOWN` error it would be in `vars`:
+
+```dart
+final stamp = UnpackStamp.tryParse(
+  File('./my_project/${UnpackStamp.fileName}').readAsStringSync(),
+);
+final plan = unbundler.plan(
+  bytes: archive,
+  targetDir: './my_project',
+  recorded: stamp?.vars ?? const {},
+  overwrite: true,
+);
+```
 
 `inspect` describes an archive without unpacking it — its `manifest`, each
 file's size, which are executable.

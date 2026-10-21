@@ -1,4 +1,5 @@
 import '../util/bytes.dart';
+import '../util/sample.dart';
 import 'archive_reader.dart';
 
 /// How two template archives differ in what they hold — never in how it is
@@ -58,19 +59,14 @@ class ArchiveDiff {
 
   /// One phrase per kind of difference, for a message.
   List<String> describe() {
-    String some(List<String> paths) {
-      final shown = paths.take(3).join(', ');
-      return paths.length > 3 ? '$shown and ${paths.length - 3} more' : shown;
-    }
-
     final modes = '${modeChanged.length} with a different executable bit';
 
     return [
       if (manifestChanged) 'the manifest changed',
-      if (changed.isNotEmpty) '${changed.length} changed (${some(changed)})',
-      if (added.isNotEmpty) '${added.length} added (${some(added)})',
-      if (removed.isNotEmpty) '${removed.length} removed (${some(removed)})',
-      if (modeChanged.isNotEmpty) '$modes (${some(modeChanged)})',
+      if (changed.isNotEmpty) '${changed.length} changed (${sample(changed)})',
+      if (added.isNotEmpty) '${added.length} added (${sample(added)})',
+      if (removed.isNotEmpty) '${removed.length} removed (${sample(removed)})',
+      if (modeChanged.isNotEmpty) '$modes (${sample(modeChanged)})',
     ];
   }
 }

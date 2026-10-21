@@ -14,6 +14,7 @@ import '../manifest/manifest_validator.dart';
 import '../manifest/substitution_template.dart';
 import '../prompt/variable_resolver.dart';
 import '../util/bytes.dart';
+import '../util/sample.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import 'case_converter.dart';
@@ -71,6 +72,8 @@ class Unbundler {
   /// one shared map across several templates therefore does **not** work; pass
   /// each template the subset it declares.
   ///
+  /// [recorded] holds the values a previous unpack recorded — see [plan].
+  ///
   /// With [overwrite], [targetDir] may already hold files — see [apply].
   /// With [stamp], the unpack records itself in the target — see [plan].
   ///
@@ -81,6 +84,7 @@ class Unbundler {
     required List<int> bytes,
     required String targetDir,
     Map<String, String> vars = const {},
+    Map<String, String> recorded = const {},
     VariableResolver? resolver,
     bool overwrite = false,
     bool stamp = false,
@@ -90,6 +94,7 @@ class Unbundler {
       bytes: bytes,
       targetDir: targetDir,
       vars: vars,
+      recorded: recorded,
       resolver: resolver,
       overwrite: overwrite,
       stamp: stamp,
@@ -106,6 +111,7 @@ class Unbundler {
     required String source,
     required String targetDir,
     Map<String, String> vars = const {},
+    Map<String, String> recorded = const {},
     VariableResolver? resolver,
     bool overwrite = false,
     bool stamp = false,
@@ -115,6 +121,7 @@ class Unbundler {
       bytes: readArchive(source),
       targetDir: targetDir,
       vars: vars,
+      recorded: recorded,
       resolver: resolver,
       overwrite: overwrite,
       stamp: stamp,
@@ -168,12 +175,19 @@ class Unbundler {
   /// not need it, and holding both sides of every text file is two extra
   /// copies of the corpus.
   ///
+  /// [recorded] holds values a previous unpack recorded — an
+  /// [UnpackStamp]'s `vars`, for regenerating a project. They come after
+  /// [vars] and before [resolver], and a name the template no longer declares
+  /// is `VARIABLE_DROPPED`, a warning: a template that dropped a variable must
+  /// not make its own stamp unusable.
+  ///
   /// [onWarning] receives the same warnings a real unpack would report, so a
   /// preview is not quieter than the thing it previews.
   UnpackPlan plan({
     required List<int> bytes,
     String? targetDir,
     Map<String, String> vars = const {},
+    Map<String, String> recorded = const {},
     VariableResolver? resolver,
     bool overwrite = false,
     bool stamp = false,
@@ -191,7 +205,7 @@ class Unbundler {
 
     final resolved = (resolver ?? const VariableResolver()).resolve(
       manifest.variables,
-      vars,
+      {...recorded, ...vars},
     );
     const VariablesValidator()
         .validate(
@@ -199,6 +213,7 @@ class Unbundler {
             variables: manifest.variables,
             values: resolved,
             explicit: vars,
+            recorded: recorded,
           ),
         )
         .report(onWarning);
@@ -218,8 +233,9 @@ class Unbundler {
     final writeStamp = targetDir != null && (stamp || previous != null);
 
     final rules = _Rules(manifest, resolved);
+    final presence = _Presence(manifest, resolved, rules);
     final renames = {
-      for (final key in archive.files.keys) key: rules.rename(key),
+      for (final key in archive.files.keys) key: presence.rename(key),
       // In the mapping so a template file renamed onto the stamp's path is a
       // collision like any other, not a file the stamp silently replaces.
       if (writeStamp) _stampKey: UnpackStamp.fileName,
@@ -232,7 +248,6 @@ class Unbundler {
     File? existing(String to) =>
         inspect == null ? null : File(p.join(inspect, to));
 
-    final presence = _Presence(manifest, resolved, rules);
     final files = [
       for (final MapEntry(key: from, value: content) in archive.files.entries)
         _planOne(
@@ -286,7 +301,8 @@ class Unbundler {
     final stale = [
       for (final path in previousFiles.keys)
         if (!written.contains(path) &&
-            File(p.join(inspect!, path)).existsSync())
+            File(p.join(inspect!, path)).existsSync() &&
+            !_writtenUnderAnotherCase(inspect, path, written))
           path,
     ];
     if (writeStamp) {
@@ -319,6 +335,35 @@ class Unbundler {
       overwrite: overwrite,
       stale: stale,
     );
+  }
+
+  /// Whether [path], in [targetDir], is the very file one of [written] names
+  /// with other casing — as it is on a case-insensitive filesystem (macOS,
+  /// Windows), where a value whose casing changed rewrites `MyApp.swift` as
+  /// `Myapp.swift`. Not a leftover, then, but the file this unpack writes.
+  static bool _writtenUnderAnotherCase(
+    String targetDir,
+    String path,
+    Set<String> written,
+  ) {
+    final folded = path.toLowerCase();
+    for (final to in written) {
+      if (to.length != path.length || to.toLowerCase() != folded) {
+        continue;
+      }
+      try {
+        if (FileSystemEntity.identicalSync(
+          p.join(targetDir, path),
+          p.join(targetDir, to),
+        )) {
+          return true;
+        }
+      } on FileSystemException {
+        // [to] does not exist yet, so it is not [path].
+      }
+    }
+
+    return false;
   }
 
   /// What `stamped` is for a file a stamp exists but does not list: a digest
@@ -427,7 +472,6 @@ class Unbundler {
     required _Presence presence,
   }) {
     final before = rules.decode(from, content);
-    presence.scanPath(from);
     var replacements = 0;
     String? after;
     var bytes = content;
@@ -793,14 +837,14 @@ class _Presence {
   /// Value casing → the files holding it, once per occurrence.
   final Map<String, List<String>> _found = {};
 
-  /// Searches the archive path [from].
-  void scanPath(String from) {
-    if (_needles.isNotEmpty) {
-      _paths.applyCounted(from, (found, start) {
-        _hit(from, found, start, from);
-      });
-    }
-  }
+  /// Where the archive entry [from] lands, after path substitution — noting
+  /// the value casings its path holds in the same pass.
+  ///
+  /// Containment of the result is `RenameValidator`'s to check, over the
+  /// whole mapping — substitution can produce a path no archive entry had.
+  String rename(String from) => _paths
+      .applyCounted(from, (found, start) => _hit(from, found, start, from))
+      .$1;
 
   /// Substitutes [text], the content of [file], noting the value casings it
   /// meets.
@@ -821,12 +865,9 @@ class _Presence {
     final byVariable = <String, List<String>>{};
     for (final MapEntry(key: spelling, value: files) in _found.entries) {
       final (_, variable, from) = _needles[spelling]!;
-      final unique = files.toSet().toList();
-      final shown = unique.take(3).join(', ');
-      final more = unique.length > 3 ? ' and ${unique.length - 3} more' : '';
       (byVariable[variable] ??= []).add(
-        "'$spelling' ${files.length} time(s), in $shown$more — where '$from' "
-        'also becomes it',
+        "'$spelling' ${files.length} time(s), in ${sample(files.toSet())} — "
+        "where '$from' also becomes it",
       );
     }
 
@@ -895,12 +936,6 @@ class _Rules {
 
   /// The UTF-8 byte-order mark.
   static const _utf8Bom = [0xEF, 0xBB, 0xBF];
-
-  /// Where the archive entry [key] lands, after path substitution.
-  ///
-  /// Containment of the result is `RenameValidator`'s to check, over the
-  /// whole mapping — substitution can produce a path no archive entry had.
-  String rename(String key) => pathSubstitutor.apply(key);
 
   /// The decoded text of [bytes], or null when the entry is copied verbatim.
   String? decode(String key, List<int> bytes) => policy.decode(key, bytes);

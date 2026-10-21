@@ -115,16 +115,32 @@ abstract class MoldCommand extends Command<int> {
     return exitCode;
   }
 
-  /// The `--var` and `--vars-file` values of [results], merged.
+  /// The `--var` and `--vars-file` values of [results].
   ///
   /// The file is read first and `--var` applied over it: a file of shared
   /// values with one overridden on the command line is the common case, and
   /// the override is as explicit as anything typed can be. A key repeated
   /// within `--var` itself is still an error — that one is ambiguous.
-  Map<String, String> varsOf(ArgResults results) => {
-    if (results['vars-file'] case final String path) ...readVarsFile(path),
-    ...parseVars(results['var'] as List<String>),
-  };
+  ///
+  /// A stamp's values are `recorded`, not `vars`: they say what a project was
+  /// made with, and a template that has since dropped a variable is a reason
+  /// to warn, not to refuse — see `Unbundler.plan`.
+  ({Map<String, String> vars, Map<String, String> recorded}) varsOf(
+    ArgResults results,
+  ) {
+    final file = switch (results['vars-file']) {
+      final String path => readVarsFile(path),
+      _ => null,
+    };
+    final given = parseVars(results['var'] as List<String>);
+    if (file == null) {
+      return (vars: given, recorded: const {});
+    }
+
+    return file.recorded
+        ? (vars: given, recorded: file.values)
+        : (vars: {...file.values, ...given}, recorded: const {});
+  }
 
   /// Declares `--var` and `--vars-file`, with [purpose] in the help.
   void addVarOptions(String purpose) {
@@ -177,9 +193,11 @@ Map<String, String> parseVars(List<String> raw) {
 /// scalars, or an [UnpackStamp], whose `vars` it takes — so a project
 /// regenerated from its own stamp gets the values it was made with.
 ///
-/// Keys are checked against the template like `--var` keys are, so a stale
-/// or mistyped one is `VARIABLE_UNKNOWN` rather than ignored.
-Map<String, String> readVarsFile(String path) {
+/// `recorded` says which it was. A map's keys are checked against the
+/// template like `--var` keys are, so a mistyped one is `VARIABLE_UNKNOWN`
+/// rather than ignored; a stamp's may name variables the template has dropped
+/// since, which is `VARIABLE_DROPPED`, a warning.
+({Map<String, String> values, bool recorded}) readVarsFile(String path) {
   final file = File(path);
   if (!file.existsSync()) {
     throw CliException('Vars file not found: $path');
@@ -200,10 +218,10 @@ Map<String, String> readVarsFile(String path) {
     if (stamp == null) {
       throw CliException('Vars file $path looks like a stamp but is not one.');
     }
-    return stamp.vars;
+    return (values: stamp.vars, recorded: true);
   }
 
-  return {
+  final values = {
     for (final MapEntry(:key, value: node) in doc.nodes.entries)
       '${nodeText(key as YamlNode)}': node is YamlScalar && node.value != null
           // As written: `1.10` stays `1.10`, `007` stays `007`.
@@ -213,4 +231,6 @@ Map<String, String> readVarsFile(String path) {
               'not ${node.value}.',
             ),
   };
+
+  return (values: values, recorded: false);
 }

@@ -177,6 +177,10 @@ abstract final class MoldCode {
   /// ⚠ A variable's value already occurs in the template.
   static const String variableValuePresent = VariablesValidator.valuePresent;
 
+  /// ⚠ A recorded value (a stamp's) names a variable the template no longer
+  /// declares; it is dropped.
+  static const String variableDropped = VariablesValidator.dropped;
+
   // ─── rename (unpack) ──────────────────────────────────────────────────────
 
   /// Two entries would land on the same path.

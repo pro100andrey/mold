@@ -154,6 +154,47 @@ extra_substitutions:
     test('a bad --level is a usage error', () async {
       expect((await mold(pack(['--level', '10']))).$1, 64);
     });
+
+    for (final format in ['bytes', 'base64']) {
+      test('a $format source checked out with CRLF is current', () async {
+        // What Git for Windows does by default (core.autocrlf=true) to a
+        // committed .dart file.
+        final args = [...pack([]), '-f', format];
+        expect((await mold(args)).$1, 0);
+        final file = File(embed);
+        file.writeAsStringSync(
+          file.readAsStringSync().replaceAll('\n', '\r\n'),
+        );
+
+        final (code, _, err) = await mold([...args, '--check']);
+
+        expect(code, 0, reason: err);
+      });
+    }
+  });
+
+  group('pack --diff', () {
+    test('reports what unpacking would warn about, each once', () async {
+      final manifest = File(p.join(project.path, 'mold.yaml'));
+      manifest.writeAsStringSync('${manifest.readAsStringSync()}flavour: x\n');
+      write(project, 'lib/app.dart', 'class MyApp {}\n');
+
+      final (code, _, err) = await mold([
+        'pack',
+        project.path,
+        '--diff',
+        '-v',
+        'name=my_app',
+      ]);
+
+      expect(code, 0, reason: err);
+      expect(err, contains(MoldCode.variableValuePresent));
+      expect(
+        MoldCode.manifestUnknownKey.allMatches(err),
+        hasLength(1),
+        reason: err,
+      );
+    });
   });
 
   group('inspect', () {
@@ -343,6 +384,38 @@ extra_substitutions:
       expect(code, 0, reason: err);
       expect(readStamp().vars['platform'], 'ios');
     });
+
+    test(
+      'a stamped variable the template has dropped is not an error',
+      () async {
+        expect((await mold(unpack(['--stamp']))).$1, 0);
+        // v2 has no `platform` any more.
+        write(project, 'mold.yaml', '''
+name: super_server
+version: 2.0.0
+variables:
+  name:
+    replaces: super_server
+''');
+        expect((await mold(['pack', project.path, '-o', archive])).$1, 0);
+
+        final (code, _, err) = await mold([
+          'unpack',
+          archive,
+          '-t',
+          target(),
+          '--no-prompt',
+          '--force',
+          '--vars-file',
+          p.join(target(), '.mold.json'),
+        ]);
+
+        expect(code, 0, reason: err);
+        expect(err, contains(MoldCode.variableDropped));
+        expect(err, contains("'platform'"));
+        expect(readStamp().vars, {'name': 'my_app'});
+      },
+    );
 
     test('a regeneration reports files the template dropped', () async {
       expect((await mold(unpack(['--stamp']))).$1, 0);

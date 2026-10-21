@@ -1,8 +1,8 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 
+import '../manifest/manifest.dart';
 import 'archive_codec.dart';
 
 /// The decoded contents of a template archive: the embedded manifest YAML and
@@ -59,7 +59,7 @@ class ArchiveReader {
 
       final name = file.name;
       if (name == 'mold.yaml') {
-        manifestYaml = utf8.decode(file.content);
+        manifestYaml = decodeManifestText(file.content, name);
       } else if (name.startsWith('files/')) {
         final rel = name.substring('files/'.length);
         // A view into the tar, not a copy. `List<int>.from` made a boxed list

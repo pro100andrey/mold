@@ -62,7 +62,8 @@ class EmbedSource {
   /// [base64Source]; null when it holds neither shape.
   ///
   /// What `pack --check` compares a committed source by: the archive inside
-  /// it, not the text around it.
+  /// it, not the text around it. Line endings do not matter — a source
+  /// committed with LF comes back with CRLF from a Windows checkout.
   List<int>? archiveOf(String source) {
     final list = _bytesList.firstMatch(source);
     if (list != null) {
@@ -98,7 +99,7 @@ class EmbedSource {
     }
   }
 
-  static final _bytesList = RegExp(r'= <int>\[\n(.*?)\];', dotAll: true);
+  static final _bytesList = RegExp(r'= <int>\[\r?\n(.*?)\];', dotAll: true);
   static final _base64Literal = RegExp(
     r"Base64 =\s*'([A-Za-z0-9+/=]*)';",
   );

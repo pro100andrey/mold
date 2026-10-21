@@ -70,7 +70,7 @@ class UnpackCommand extends MoldCommand {
     final targetDir =
         (results['target'] as String?) ??
         './${p.basenameWithoutExtension(source)}';
-    final vars = varsOf(results);
+    final (:vars, :recorded) = varsOf(results);
 
     final resolver = VariableResolver(
       noPrompt: results['no-prompt'] as bool,
@@ -91,6 +91,7 @@ class UnpackCommand extends MoldCommand {
       bytes: Unbundler.readArchive(source),
       targetDir: targetDir,
       vars: vars,
+      recorded: recorded,
       resolver: resolver,
       overwrite: results['force'] as bool,
       stamp: results['stamp'] as bool,
