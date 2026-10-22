@@ -1,5 +1,8 @@
 /// Whether [a] and [b] hold the same bytes.
 bool sameBytes(List<int> a, List<int> b) {
+  if (identical(a, b)) {
+    return true;
+  }
   if (a.length != b.length) {
     return false;
   }

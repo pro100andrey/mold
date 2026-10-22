@@ -399,12 +399,26 @@ variables:
         final r = validator.validate(p.join(tmp.path, 'fresh'));
         expect(r.isValid, isTrue);
       });
+
+      test('a target whose parents are missing, creating none of them', () {
+        final r = validator.validate(p.join(tmp.path, 'no', 'such', 'child'));
+        expect(r.isValid, isTrue);
+        expect(Directory(p.join(tmp.path, 'no')).existsSync(), isFalse);
+      });
     });
 
     group('rejects', () {
-      test('TARGET_PARENT_NOT_FOUND', () {
-        final r = validator.validate(p.join(tmp.path, 'no', 'child'));
-        expect(r, rejectsWith(TargetValidator.parentNotFound));
+      test('TARGET_NOT_DIRECTORY: the target is a file', () {
+        final file = File(p.join(tmp.path, 'file'))..writeAsStringSync('x');
+        final r = validator.validate(file.path);
+        expect(r, rejectsWith(TargetValidator.notDirectory));
+      });
+
+      test('TARGET_NOT_DIRECTORY: a parent is a file', () {
+        final file = File(p.join(tmp.path, 'file'))..writeAsStringSync('x');
+        final r = validator.validate(p.join(file.path, 'a', 'child'));
+        expect(r, rejectsWith(TargetValidator.notDirectory));
+        expect(r.errors.single.message, contains(file.path));
       });
 
       test('TARGET_OCCUPIED', () {
@@ -421,6 +435,18 @@ variables:
           Process.runSync('chmod', ['500', ro.path]);
           addTearDown(() => Process.runSync('chmod', ['700', ro.path]));
           final r = validator.validate(p.join(ro.path, 'child'));
+          expect(r, rejectsWith(TargetValidator.notWritable));
+        },
+        skip: Platform.isWindows ? 'POSIX permissions only' : null,
+      );
+
+      test(
+        'TARGET_NOT_WRITABLE: where the missing parents would be made',
+        () {
+          final ro = Directory(p.join(tmp.path, 'ro'))..createSync();
+          Process.runSync('chmod', ['500', ro.path]);
+          addTearDown(() => Process.runSync('chmod', ['700', ro.path]));
+          final r = validator.validate(p.join(ro.path, 'a', 'child'));
           expect(r, rejectsWith(TargetValidator.notWritable));
         },
         skip: Platform.isWindows ? 'POSIX permissions only' : null,

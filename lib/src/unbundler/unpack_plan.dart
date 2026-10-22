@@ -3,6 +3,18 @@ import 'dart:typed_data';
 import '../manifest/manifest.dart';
 import '../manifest/substitution_template.dart';
 
+/// Rewrites a template file's bytes while an unpack is planned.
+///
+/// Called once per template file — not for the stamp — with [path], where
+/// the file lands under the target, and [bytes], what substitution made of
+/// it. Returns the bytes to write; [bytes] itself to keep them.
+///
+/// Runs inside planning, so everything that depends on the bytes —
+/// [PlannedFile.identicalToExisting], [PlannedFile.editedSinceStamp], the
+/// digest the stamp records — is about what is actually written. Rewriting a
+/// finished [UnpackPlan] could not keep those right.
+typedef FileRewriter = List<int> Function(String path, Uint8List bytes);
+
 /// What an unpack would do to one archive entry.
 class PlannedFile {
   const PlannedFile({
@@ -12,6 +24,7 @@ class PlannedFile {
     required this.replacements,
     required this.bytes,
     this.executable = false,
+    this.rewritten = false,
     this.before,
     this.after,
     this.overwrites = false,
@@ -44,14 +57,19 @@ class PlannedFile {
   /// Whether the file would be made owner-executable.
   final bool executable;
 
+  /// Whether a [FileRewriter] changed [bytes] — on top of the [replacements],
+  /// if any.
+  final bool rewritten;
+
   /// The decoded content before substitution; null when the content is not
   /// valid UTF-8 or the plan was built without content.
   ///
   /// A [verbatim] file that is text has it too, equal to [after].
   final String? before;
 
-  /// The decoded content after substitution; null when the content is not
-  /// valid UTF-8 or the plan was built without content.
+  /// The decoded content after substitution and any [rewritten] change; null
+  /// when the content is not valid UTF-8 or the plan was built without
+  /// content.
   final String? after;
 
   /// Whether a file is already at [to] in the target, so writing this one
@@ -83,7 +101,7 @@ class PlannedFile {
   bool get renamed => from != to;
 
   /// Whether anything about this file changes.
-  bool get changed => renamed || replacements > 0;
+  bool get changed => renamed || replacements > 0 || rewritten;
 }
 
 /// Everything an unpack would do, without doing any of it.
@@ -135,8 +153,10 @@ class UnpackPlan {
   /// Files whose path changes.
   Iterable<PlannedFile> get renamed => files.where((f) => f.renamed);
 
-  /// Files whose content changes.
-  Iterable<PlannedFile> get rewritten => files.where((f) => f.replacements > 0);
+  /// Files whose content changes: substituted, or rewritten by a
+  /// [FileRewriter].
+  Iterable<PlannedFile> get rewritten =>
+      files.where((f) => f.replacements > 0 || f.rewritten);
 
   /// The template's own files: [files] without the [PlannedFile.generated]
   /// stamp.

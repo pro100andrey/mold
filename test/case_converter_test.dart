@@ -1,4 +1,5 @@
 import 'package:test/test.dart';
+import 'package:yaml/yaml.dart';
 
 import 'support/internals.dart';
 
@@ -127,6 +128,7 @@ void main() {
       expect(CaseTransform.flatCase.apply('my_project'), 'myproject');
       expect(CaseTransform.flatCase.apply('HTTPServer'), 'httpserver');
       expect(CaseTransform.pathCase.apply('com.acme'), 'com/acme');
+      expect(CaseTransform.yamlString.apply('my_app'), 'my_app');
     });
 
     test('pathCase converts separators, it does not re-word', () {
@@ -162,6 +164,58 @@ void main() {
         '',
       );
       expect(CaseTransform.titleCase.apply(''), '');
+    });
+
+    group('yamlString', () {
+      String yaml(String v) => CaseTransform.yamlString.apply(v);
+
+      test('leaves a value plain when it reads back as itself', () {
+        for (final v in ['my_app', 'lib/src/app.dart', 'My App', '-x', '1.x']) {
+          expect(yaml(v), v);
+        }
+      });
+
+      test('quotes and escapes one that would not', () {
+        expect(yaml(r'C:\work\app'), r'"C:\\work\\app"');
+        expect(yaml('a: b'), '"a: b"');
+        expect(yaml('say "hi"'), r'"say \"hi\""');
+        expect(yaml(''), '""');
+        for (final v in ['yes', 'No', 'on', 'true', 'null', '~', '42', '1.0']) {
+          expect(yaml(v), '"$v"');
+        }
+      });
+
+      test('reads back as the value, in block and in flow context', () {
+        const values = [
+          'my_app',
+          r'C:\Program Files\App',
+          'a: b # c',
+          "it's",
+          '[x], {y}',
+          ' padded ',
+          'line\nbreak\ttab',
+          '*ref',
+          '!tag',
+          '%dir',
+          '@at',
+          '`tick`',
+          'ünïcödé',
+          '0x1F',
+          '.inf',
+          '-',
+          '- item',
+        ];
+        for (final v in values) {
+          final scalar = yaml(v);
+          expect(loadYaml('key: $scalar'), {'key': v}, reason: scalar);
+          expect(loadYaml('[$scalar, z]'), [v, 'z'], reason: scalar);
+        }
+      });
+
+      test('is not taken for a spelling of a token', () {
+        expect(CaseTransform.yamlString.spellsToken, isFalse);
+        expect(CaseTransform.pathCase.spellsToken, isTrue);
+      });
     });
 
     test('byNameOrNull is the lookup, names lists the choices', () {

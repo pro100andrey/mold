@@ -116,6 +116,117 @@ void main() {
     });
   });
 
+  group('a target whose parents are missing', () {
+    test('is planned without creating anything', () {
+      final nested = p.join(tmp.path, 'new', 'nested', 'out');
+      const Unbundler().plan(
+        bytes: archive,
+        targetDir: nested,
+        vars: {'name': 'my_app'},
+      );
+
+      expect(Directory(p.join(tmp.path, 'new')).existsSync(), isFalse);
+    });
+
+    test('is created, parents and all', () async {
+      final nested = p.join(tmp.path, 'new', 'nested', 'out');
+      await const Unbundler().unbundle(
+        bytes: archive,
+        targetDir: nested,
+        vars: {'name': 'my_app'},
+      );
+
+      expect(
+        File(p.join(nested, 'pubspec.yaml')).readAsStringSync(),
+        'name: my_app\n',
+      );
+    });
+
+    test('under a file is TARGET_NOT_DIRECTORY', () {
+      final file = File(p.join(tmp.path, 'file'))..writeAsStringSync('x');
+
+      expect(
+        () => const Unbundler().plan(
+          bytes: archive,
+          targetDir: p.join(file.path, 'out'),
+          vars: {'name': 'my_app'},
+        ),
+        failsWith(MoldCode.targetNotDirectory),
+      );
+    });
+  });
+
+  group('a rewrite while planning', () {
+    List<int> licensed(String path, List<int> bytes) =>
+        path == 'README.md' ? [...bytes, ...'MIT\n'.codeUnits] : bytes;
+
+    test('changes the bytes written, and only of the files it changes', () {
+      final planned = const Unbundler().plan(
+        bytes: archive,
+        targetDir: target(),
+        vars: {'name': 'my_app'},
+        rewrite: licensed,
+      );
+      final byPath = {for (final f in planned.files) f.to: f};
+
+      expect(
+        String.fromCharCodes(byPath['README.md']!.bytes),
+        'nothing here\nMIT\n',
+      );
+      expect(byPath['README.md']!.after, 'nothing here\nMIT\n');
+      expect(byPath['README.md']!.rewritten, isTrue);
+      expect(byPath['README.md']!.changed, isTrue);
+      expect(byPath['pubspec.yaml']!.rewritten, isFalse);
+      expect(planned.rewritten.map((f) => f.to), contains('README.md'));
+      expect(planned.untouched, isEmpty);
+    });
+
+    test('sees where the file lands and what substitution made of it', () {
+      final seen = <String, String>{};
+      const Unbundler().plan(
+        bytes: archive,
+        targetDir: target(),
+        vars: {'name': 'my_app'},
+        rewrite: (path, bytes) {
+          seen[path] = String.fromCharCodes(bytes);
+          return bytes;
+        },
+      );
+
+      expect(seen, {
+        'pubspec.yaml': 'name: my_app\n',
+        'README.md': 'nothing here\n',
+      });
+    });
+
+    test('is what the stamp records, so a regeneration sees no edit', () async {
+      final out = target();
+      await const Unbundler().unbundle(
+        bytes: archive,
+        targetDir: out,
+        vars: {'name': 'my_app'},
+        stamp: true,
+        rewrite: licensed,
+      );
+      final warnings = <ValidationError>[];
+      final again = const Unbundler().plan(
+        bytes: archive,
+        targetDir: out,
+        vars: {'name': 'my_app'},
+        overwrite: true,
+        rewrite: licensed,
+        onWarning: warnings.add,
+      );
+
+      expect(again.templateFiles.every((f) => f.identicalToExisting), isTrue);
+      expect(again.edited, isEmpty);
+      expect(
+        warnings.map((w) => w.code),
+        isNot(contains(MoldCode.unpackOverwritesEdits)),
+      );
+    });
+  });
+
   group('errors arrive in the Future', () {
     test('unbundle does not throw synchronously', () async {
       Directory(target()).createSync();

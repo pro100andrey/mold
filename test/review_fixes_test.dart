@@ -194,6 +194,21 @@ variables:
       );
     });
 
+    test('so are the missing parents it created for the target', () async {
+      write('a.txt', 'hello\n');
+      write('blocker.txt', 'hello\n');
+      final archive = await pack('name: t\nversion: 1\n');
+
+      await expectLater(
+        const Unbundler().unbundle(
+          bytes: _withEntryRenamedToNest(archive),
+          targetDir: '${tmp.path}/new/nested/out',
+        ),
+        throwsA(isA<Object>()),
+      );
+      expect(Directory('${tmp.path}/new').existsSync(), isFalse);
+    });
+
     test('a pre-existing empty directory survives its files going', () async {
       write('a.txt', 'hello\n');
       write('blocker.txt', 'hello\n');

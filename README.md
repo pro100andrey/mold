@@ -194,9 +194,14 @@ to review with `mold pack ./app_template --dry-run`.
 
 ### Unpacking into a non-empty directory
 
-By default the target must not exist, or be an empty directory; anything else
-is `TARGET_OCCUPIED`. `--force` writes into a directory that already holds
-files — the way a tool regenerates a project in place:
+By default the target must not exist, or be an empty directory; a directory
+with files in it is `TARGET_OCCUPIED`. Missing parents are fine — the target
+and every directory on the way to it are created, and a `--dry-run` into a new
+nested directory checks them without creating any. A file at the target, or
+on the way to it, is `TARGET_NOT_DIRECTORY`.
+
+`--force` writes into a directory that already holds files — the way a tool
+regenerates a project in place:
 
 - each file the template has is written over the file at the same path;
 - every file the template does not have is left as it is;
@@ -568,6 +573,7 @@ Only the `to:` side of a substitution or path rename is a template, and the
 | `titleCase`     | `my_project` | `My Project` |
 | `flatCase`      | `my_project` | `myproject`  |
 | `pathCase`      | `com.acme`   | `com/acme`   |
+| `yamlString`    | `C:\work`    | `"C:\\work"` |
 
 Whitespace inside the braces is insignificant. Chaining (`{{ a | x | y }}`) is
 refused rather than read as a transform named `x | y`.
@@ -585,6 +591,13 @@ organisation itself — `com.acme` → `com/acme` — so the two cannot be set
 inconsistently. It is the one transform that is not a case conversion: segments
 keep the spelling they were given, so `com.acmeCorp` is `com/acmeCorp`, not
 `com/acme/corp`.
+
+`yamlString` is for a value that lands in YAML: it writes the value as a whole
+scalar, so it goes where a scalar goes — `root: {{ dir | yamlString }}`, not
+inside quotes of the template's own. A value that reads back as itself stays
+plain (`my_app`, `lib/src`); anything else — a backslash, a `: `, a leading
+`*`, `yes`, `42`, an empty value — is double-quoted with escapes, so the file
+parses to the same string whatever was typed.
 
 Templates are validated at pack time *and* again at unpack, so a bad
 placeholder or an undeclared variable fails when the template is built, not
@@ -820,8 +833,8 @@ and reach `onWarning` — on stderr in the CLI.
 | unpack | `ARCHIVE_MISSING_MANIFEST`          | no embedded `mold.yaml`                        |
 | unpack | `ARCHIVE_MISSING_FILES`             | no `files/` tree                               |
 | unpack | `ARCHIVE_UNSAFE_PATH`               | an entry escapes the target directory          |
-| unpack | `TARGET_PARENT_NOT_FOUND`           | parent directory missing                       |
-| unpack | `TARGET_OCCUPIED`                   | target is a file, or not empty (no `--force`)  |
+| unpack | `TARGET_NOT_DIRECTORY`              | the target, or a parent of it, is a file       |
+| unpack | `TARGET_OCCUPIED`                   | target is not empty (no `--force`)             |
 | unpack | `TARGET_NOT_WRITABLE`               | no write permission                            |
 | unpack | `VARIABLE_MISSING`                  | required variable has no value                 |
 | unpack | `VARIABLE_INVALID_FORMAT`           | value is not a well-formed name token          |
@@ -959,6 +972,22 @@ target, whether that file is `identicalToExisting`, and its `existing` text.
 also carries the `manifest` and the resolved `values`. A plan made with no
 `targetDir` previews substitution only and cannot be applied.
 
+To change a file's bytes beyond what the manifest substitutes, pass `rewrite`.
+It is called while planning, once per template file, with where the file lands
+and what substitution made of it, and returns the bytes to write — so
+`identicalToExisting`, the stamp's digests and everything else in the plan are
+about those bytes. A file it changed is `rewritten`:
+
+```dart
+final plan = unbundler.plan(
+  bytes: archive,
+  targetDir: './my_project',
+  vars: {'project_name': 'my_project'},
+  rewrite: (path, bytes) =>
+      path == 'LICENSE' ? utf8.encode(licenseText) : bytes,
+);
+```
+
 To regenerate a project from its stamp, pass the stamp's values as
 `recorded`. They come after `vars` and before the resolver, and one naming a
 variable the template has dropped is a `VARIABLE_DROPPED` warning, not the
@@ -1052,6 +1081,9 @@ To render the source yourself:
 final dartSource = const EmbedSource()
     .bytesSource(archive: archive, name: 'super_server');
 ```
+
+`bytesSource` and `base64Source` take a `doc`, written above the constant as
+its `///` comment.
 
 ---
 

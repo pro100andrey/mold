@@ -123,7 +123,7 @@ void main() {
 
       expect(
         () => unpack(overwrite: true),
-        rejectsWith(TargetValidator.occupied),
+        rejectsWith(TargetValidator.notDirectory),
       );
       expect(File(out.path).readAsStringSync(), 'not a directory');
     });
@@ -326,6 +326,14 @@ void main() {
       expect(code, 1);
       expect(err, contains(TargetValidator.occupied));
       expect(err, contains('--force'));
+    });
+
+    test('the library message does not name the CLI flag', () {
+      scaffoldAndEdit();
+
+      final r = const TargetValidator().validate(out.path);
+      expect(r.errors.single.code, TargetValidator.occupied);
+      expect(r.errors.single.message, isNot(contains('--force')));
     });
 
     test('writes into an occupied target', () async {
