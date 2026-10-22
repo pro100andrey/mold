@@ -26,9 +26,11 @@ class CliException implements Exception {
 ///
 /// Human-facing text goes to [err] — it is commentary on the work, not its
 /// product, and keeping it off stdout is what lets `--json` own stdout
-/// entirely. Under `--json`, warnings are collected into the document instead
-/// of printed, and a validation failure is a document too (`errors`), so a
-/// tool reading stdout always gets JSON and an exit code.
+/// entirely. The only other stdout is a manifest printed to be redirected:
+/// `init --dry-run`, `inspect --manifest`. Under `--json`, warnings are
+/// collected into the document instead of printed, and a validation failure
+/// is a document too (`errors`), so a tool reading stdout always gets JSON
+/// and an exit code.
 abstract class MoldCommand extends Command<int> {
   MoldCommand(this.out, this.err, {this._input}) {
     argParser.addFlag(

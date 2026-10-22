@@ -6,9 +6,10 @@
 /// operation's name — an `UnpackPlan`, an `UnpackStamp`, `UNPACK_…` codes.
 ///
 /// `Bundler` packs a project into archive bytes; `Unbundler` plans an unpack
-/// (`UnpackPlan`) and applies it. `EmbedSource` renders an archive as a Dart
-/// source to ship inside a binary, and `UnifiedDiff` renders a planned file's
-/// change.
+/// (`UnpackPlan`) and applies it, or describes an archive without unpacking
+/// it (`Unbundler.inspect`, a `TemplateInfo`). `EmbedSource` renders an
+/// archive as a Dart source to ship inside a binary, and `UnifiedDiff`
+/// renders a planned file's change.
 ///
 /// Problems with the inputs throw a `ValidationException`; its errors carry
 /// the codes listed in `MoldCode`. Warnings reach an `onWarning` callback as

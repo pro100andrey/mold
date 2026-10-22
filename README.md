@@ -48,9 +48,13 @@ On Dart SDKs older than the `dart install` command, use the classic form:
 dart pub global activate mold
 ```
 
-Check it: `mold --help`. If the command is not found, add pub's bin directory
-to your `PATH` — `~/.pub-cache/bin` on macOS and Linux,
-`%LOCALAPPDATA%\Pub\Cache\bin` on Windows.
+Check it: `mold --help`. If the command is not found, the directory it was
+installed into is not on your `PATH`; `dart install` prints the line that adds
+it. That directory is Dart's own, not pub's: `~/.local/state/Dart/install/bin`
+on Linux (under `$XDG_STATE_HOME` when set),
+`~/Library/Application Support/Dart/install/bin` on macOS,
+`%LOCALAPPDATA%\Dart\install\bin` on Windows. `dart pub global activate`
+uses pub's: `~/.pub-cache/bin`, or `%LOCALAPPDATA%\Pub\Cache\bin` on Windows.
 
 ### As a library
 
@@ -154,8 +158,9 @@ mold inspect <archive | -> [options]
 `mold help <command>` for the full option list. During development:
 `dart run mold:mold pack ./super_server`.
 
-Human-facing output goes to stderr; stdout carries only `--json` documents.
-Under `--json`, warnings are part of the document, and a failure is a document
+Human-facing output goes to stderr; stdout carries only what a tool would
+read — `--json` documents, and the manifest YAML of `init --dry-run` and
+`inspect --manifest`. Under `--json`, warnings are part of the document, and a failure is a document
 too — `{"errors": [{"code": …, "message": …}], "warnings": […]}` with exit 1 —
 so a tool reading stdout always gets JSON. Failures that carry no library code
 use `CLI_USAGE` (bad arguments, a missing vars file — exit 64) and
@@ -773,10 +778,9 @@ manifest defaults only — `pack` never prompts, so it stays usable from CI.
 
 ## Validation
 
-Every phase is validated with structured, coded errors.
-`ValidationResult.throwIfInvalid()` throws a `ValidationException` when any
-error-severity issue is present; warnings never block and are printed to
-stderr.
+Every phase is validated with structured, coded errors. An error-severity
+issue throws a `ValidationException` (the CLI exits 1); warnings never block,
+and reach `onWarning` — on stderr in the CLI.
 
 | Phase  | Code                                | Meaning                                        |
 | ------ | ----------------------------------- | ---------------------------------------------- |
@@ -961,9 +965,10 @@ variable the template has dropped is a `VARIABLE_DROPPED` warning, not the
 `VARIABLE_UNKNOWN` error it would be in `vars`:
 
 ```dart
-final stamp = UnpackStamp.tryParse(
-  File('./my_project/${UnpackStamp.fileName}').readAsStringSync(),
-);
+final stampFile = File('./my_project/${UnpackStamp.fileName}');
+final stamp = stampFile.existsSync()
+    ? UnpackStamp.tryParse(stampFile.readAsStringSync())
+    : null;
 final plan = unbundler.plan(
   bytes: archive,
   targetDir: './my_project',

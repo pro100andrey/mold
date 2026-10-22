@@ -49,5 +49,8 @@ mold pack ./super_server -m mold.yaml -o super_server.mold
 mold unpack super_server.mold -t ./acme_shop --var project_name=acme_shop
 ```
 
+`-m` is only here because this `mold.yaml` sits beside the project rather than
+in it; a project's own `<dir>/mold.yaml` needs no flag.
+
 Add `--diff` to either command to preview every rename before it happens. See
 the [package README](../README.md) for the full manifest reference.
