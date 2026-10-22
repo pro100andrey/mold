@@ -26,11 +26,17 @@ class Bundler {
     this.fastCompression = false,
   });
 
-  /// The gzip level, 0 (store) to 9 (smallest). See [ArchiveWriter].
+  /// The gzip level, 0 (store) to 9 (smallest); 6 by default. Anything else
+  /// is a [RangeError] from [bundle].
+  ///
+  /// The archive is reproducible at any one level: the same project packs to
+  /// the same bytes on every platform.
   final int compressionLevel;
 
-  /// Compress with the VM's zlib: about 2.7x faster, but the bytes may differ
-  /// across platforms and SDKs. See [ArchiveWriter].
+  /// Whether to compress with the VM's zlib rather than the pure-Dart
+  /// deflate: about 2.7x faster at the gzip step, but the bytes may differ
+  /// from one platform or SDK to another. Packing stays reproducible on one
+  /// machine, and `pack --check` compares content, so it is unaffected.
   final bool fastCompression;
 
   /// Packs [projectDir] per [manifest] and returns the archive bytes.

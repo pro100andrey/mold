@@ -1,6 +1,10 @@
 /// `mold` — pack a project into a portable template archive and unpack it
 /// with manifest-driven renaming.
 ///
+/// The operations are *pack* and *unpack*, as the CLI names them. The classes
+/// performing them are `Bundler` and `Unbundler`; what they produce keeps the
+/// operation's name — an `UnpackPlan`, an `UnpackStamp`, `UNPACK_…` codes.
+///
 /// `Bundler` packs a project into archive bytes; `Unbundler` plans an unpack
 /// (`UnpackPlan`) and applies it. `EmbedSource` renders an archive as a Dart
 /// source to ship inside a binary, and `UnifiedDiff` renders a planned file's

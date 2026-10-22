@@ -304,7 +304,7 @@ void main() {
 
     Future<(int, String)> cli(List<String> extra) async {
       final err = StringBuffer();
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'unpack',
         archivePath,
         '-t',

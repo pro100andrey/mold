@@ -62,6 +62,37 @@ class _TokenStats {
   }
 }
 
+/// A spelling of a variable's token that no derived casing covers, but
+/// [transform] reproduces — so the `extra_substitutions` entry [suggestion]
+/// renames it the way the template meant.
+class UncoveredSpelling {
+  const UncoveredSpelling({
+    required this.variable,
+    required this.spelling,
+    required this.transform,
+    required this.files,
+  });
+
+  /// The variable whose token it spells.
+  final String variable;
+
+  /// The spelling, as it occurs.
+  final String spelling;
+
+  /// The transform producing it from the token.
+  final CaseTransform transform;
+
+  /// The files — or paths — it occurs in.
+  final List<String> files;
+
+  /// The entry that renames it.
+  Substitution get suggestion =>
+      Substitution(from: spelling, to: '{{ $variable | ${transform.name} }}');
+}
+
+/// Receives an [UncoveredSpelling].
+typedef SuggestionSink = void Function(UncoveredSpelling spelling);
+
 /// Input to the [ProjectValidator]: the source [dir] and its [manifest].
 class ProjectInput {
   const ProjectInput({
@@ -116,7 +147,12 @@ class ProjectInput {
 /// whose files extend its name with `_` (`app_template_test`) at 14% on a
 /// real one.
 class ProjectValidator extends ValidatorBase<ProjectInput> {
-  const ProjectValidator();
+  const ProjectValidator({this.onSuggestion});
+
+  /// Receives each `extra_substitutions` entry `PROJECT_UNCOVERED_CASING`
+  /// suggests, as data rather than inside a message — what `mold init`
+  /// offers to add.
+  final SuggestionSink? onSuggestion;
 
   static const dirNotFound = 'PROJECT_DIR_NOT_FOUND';
   static const dirEmpty = 'PROJECT_DIR_EMPTY';
@@ -238,6 +274,21 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
 
       if (s.uncovered.isNotEmpty) {
         issues.add(_uncoveredWarning(name, token, s.uncovered));
+        if (onSuggestion case final sink?) {
+          for (final MapEntry(key: spelling, value: files)
+              in s.uncovered.entries) {
+            if (_transformFor(token, spelling) case final transform?) {
+              sink(
+                UncoveredSpelling(
+                  variable: name,
+                  spelling: spelling,
+                  transform: transform,
+                  files: files.toSet().toList(),
+                ),
+              );
+            }
+          }
+        }
       }
 
       if (s.matches == 0) {
@@ -310,7 +361,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   ///
   /// An entry is suggested only where a transform reproduces the spelling
   /// exactly from the token, so pasting it renames that site the way the
-  /// template meant; a spelling no transform produces (`apptemplate`) is
+  /// template meant; a spelling no transform produces (`app.template`) is
   /// named without a guess.
   static ValidationError _uncoveredWarning(
     String name,
@@ -327,9 +378,7 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
     final entries = <String>[];
     final unmatched = <String>[];
     for (final MapEntry(key: spelling) in spellings) {
-      final transform = CaseTransform.values
-          .where((t) => t.apply(token) == spelling)
-          .firstOrNull;
+      final transform = _transformFor(token, spelling);
       if (transform == null) {
         unmatched.add("'$spelling'");
       } else {
@@ -351,6 +400,10 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       field: name,
     );
   }
+
+  /// The transform that spells [token] as [spelling] exactly, if any.
+  static CaseTransform? _transformFor(String token, String spelling) =>
+      CaseTransform.values.where((t) => t.apply(token) == spelling).firstOrNull;
 
   /// Runs [search] over every packed path and every substituted text, the
   /// way unpacking will meet them.

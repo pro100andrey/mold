@@ -54,9 +54,14 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
   /// template's content.
   static const valuePresent = 'VARIABLE_VALUE_PRESENT';
 
-  /// A value used for a `replaces` token must read like an identifier: start
-  /// with a letter, then letters/digits/space/underscore/hyphen.
-  static final _nameFormat = RegExp(r'^[A-Za-z][A-Za-z0-9 _-]*$');
+  /// A value used for a `replaces` token must be a name the casings can be
+  /// derived from: ASCII letters, digits, space, underscore and hyphen, with
+  /// at least one letter.
+  ///
+  /// A leading digit is allowed — `3d-viewer` is a fine npm package, Go
+  /// module or directory, if not a Dart one. A language that forbids it says
+  /// so with the variable's `pattern`.
+  static final _nameFormat = RegExp(r'^(?=.*[A-Za-z])[A-Za-z0-9 _-]+$');
 
   @override
   String get phase => 'variables';
@@ -118,41 +123,47 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
         continue;
       }
 
-      if (variable.choices.isNotEmpty && !variable.choices.contains(value)) {
-        issues.add(
-          ValidationError(
-            notAChoice,
-            "Variable '${variable.name}' value '$value' is not one of: "
-            '${variable.choices.join(', ')}.',
-            field: variable.name,
-          ),
-        );
-        continue;
-      }
-      if (variable.pattern != null && !variable.accepts(value)) {
-        issues.add(
-          ValidationError(
-            patternMismatch,
-            "Variable '${variable.name}' value '$value' does not match "
-            "pattern '${variable.pattern}'.",
-            field: variable.name,
-          ),
-        );
-        continue;
-      }
-
-      if (variable.replaces != null && !_nameFormat.hasMatch(value)) {
-        issues.add(
-          ValidationError(
-            invalidFormat,
-            "Variable '${variable.name}' value '$value' is not a valid name "
-            'token.',
-            field: variable.name,
-          ),
-        );
+      final issue = checkValue(variable, value);
+      if (issue != null) {
+        issues.add(issue);
       }
     }
 
     return ValidationResult(issues);
+  }
+
+  /// What is wrong with [value] for [variable], or null when it is
+  /// acceptable: not a choice, not matching the pattern, or — for a
+  /// `replaces` variable — not a name token.
+  ///
+  /// One check for the prompter and the validator, so a prompt re-asks for
+  /// exactly what validation would refuse.
+  static ValidationError? checkValue(TemplateVariable variable, String value) {
+    if (variable.choices.isNotEmpty && !variable.choices.contains(value)) {
+      return ValidationError(
+        notAChoice,
+        "Variable '${variable.name}' value '$value' is not one of: "
+        '${variable.choices.join(', ')}.',
+        field: variable.name,
+      );
+    }
+    if (variable.pattern != null && !variable.accepts(value)) {
+      return ValidationError(
+        patternMismatch,
+        "Variable '${variable.name}' value '$value' does not match "
+        "pattern '${variable.pattern}'.",
+        field: variable.name,
+      );
+    }
+    if (variable.replaces != null && !_nameFormat.hasMatch(value)) {
+      return ValidationError(
+        invalidFormat,
+        "Variable '${variable.name}' value '$value' is not a valid name "
+        'token.',
+        field: variable.name,
+      );
+    }
+
+    return null;
   }
 }

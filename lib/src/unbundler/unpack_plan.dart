@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../manifest/manifest.dart';
+import '../manifest/substitution_template.dart';
 
 /// What an unpack would do to one archive entry.
 class PlannedFile {
@@ -124,6 +125,12 @@ class UnpackPlan {
   /// worth knowing about when regenerating: they are what a fresh unpack of
   /// the same template would not contain.
   final List<String> stale;
+
+  /// The manifest's `message`, rendered with [values]; null when it has none.
+  String? get message => switch (manifest.message) {
+    final text? => SubstitutionTemplate.parse(text).render(values),
+    null => null,
+  };
 
   /// Files whose path changes.
   Iterable<PlannedFile> get renamed => files.where((f) => f.renamed);

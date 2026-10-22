@@ -36,6 +36,7 @@ adding what regenerating a project needs.
   `UnifiedDiff`, the validation types, and `MoldCode` — every code as a
   constant. Validators, scanners, archive helpers, case conversion and the
   CLI classes are internal.
+- Requires Dart 3.13.5; dependencies bumped.
 
 ### Faster, leaner
 
@@ -80,6 +81,20 @@ whole-file diff.
   CRLF, as Git for Windows does by default, is current.
 
 ### Sharper checks
+
+- **No false `PROJECT_PARTIAL_OVERLAP` on separator-joined names.** A match
+  counted as "inside a longer word" when any `\w` touched it, and `_` is one,
+  so for `replaces: app_template` the project's own `app_template_test` and
+  `app_template_g` counted as over-reach — warning on every pack, or past 30%
+  refusing it — although rewriting them to `my_app_test` is the point. What
+  continues a word now depends on the casing that matched: for snake, kebab and
+  SCREAMING a letter or digit, for Pascal a following lowercase letter. So
+  `AppTemplateTest` and `MyAppTemplate` are whole words too, while `my_app` in
+  `my_appendix`, `app` in `application` and `MyApp` in `MyApplication` are
+  still caught. Thresholds and messages are unchanged.
+
+  Ratios drop for most tokens. On a fresh `flutter create` project: `app` 83%
+  → 65%, `test` 95% → 73%, `runner` 26% → under 5%, `bin` 75% unchanged.
 
 - The too-generic error recommends `extra_substitutions`, but the check
   ignored them, so following its advice changed nothing. The check now
@@ -152,6 +167,17 @@ whole-file diff.
   (`summary.stamp` in `--json`) rather than counted as an unchanged file.
 - `pack --vars-file` without `--diff` is refused in its own name, not
   `--var`'s.
+- A `replaces` value may start with a digit — `3d-viewer` — as long as it
+  has a letter; a language that forbids it says so with `pattern`.
+- A prompt asks again — up to three times — for an answer outside
+  `choices`, not matching `pattern`, or not a name token, saying why. The
+  unpack used to fail only after every other prompt, answers lost.
+- `RENAME_INVALID_NAME`: on Windows, a renamed path Windows cannot create —
+  `a:b`, which opens an alternate data stream, `CON`, a trailing dot — is
+  refused before anything is written. Elsewhere it unpacks as before; pack
+  still only warns (`PROJECT_PATH_NOT_PORTABLE`).
+- A manifest written by `Manifest.toYaml` escapes control characters, which
+  YAML does not allow as written, so it reads back.
 
 The new checks ride existing passes where they can: finding a variable's
 value shares the substitution's scan, and every literal alternation is
@@ -161,30 +187,6 @@ about 130 ms more on the corpus above.
 
 ### New
 
-- **Variable constraints.** `pattern:` (a regex the whole value must match)
-  and `choices:` (the only values allowed, shown by the prompt), enforced as
-  `VARIABLE_PATTERN_MISMATCH` / `VARIABLE_NOT_A_CHOICE`; a pattern that does
-  not compile or a default they reject is caught at pack.
-- **Recorded values** (`plan(recorded: …)`, and what `--vars-file .mold.json`
-  passes): a stamp's values fill the variables after `vars` and before the
-  resolver, and one naming a variable the template has dropped is
-  `VARIABLE_DROPPED` ⚠, not `VARIABLE_UNKNOWN`. A regeneration from a stamp
-  used to fail on the template's first change to its variables.
-- **`mold inspect <archive>`** (`Unbundler.inspect`): the manifest, variables,
-  substitutions and — with `--files` — the files, without unpacking.
-- **`mold pack … --check`**: exit 1 when the committed archive or embed source
-  is not what packing writes now. For CI; writes nothing.
-- **`--stamp`** leaves `.mold.json` in the target — template, version, values
-  and files — kept up to date by every later `--force`. A regeneration then
-  reports the files the template has dropped (`UNPACK_STALE_FILES`, left in
-  place), and…
-- **`--vars-file`** feeds values from a YAML/JSON map or a stamp, with `--var`
-  applied over it.
-- **`--json`** on every command: the result on stdout, warnings inside it, and
-  a failure as `{"errors": […]}` with exit 1.
-
-## 0.1.4
-
 - **`mold unpack --force`** unpacks into a directory that already holds files —
   for a tool that regenerates a project in place, which until now had to unpack
   into a scratch directory and copy the result over itself. Each file the
@@ -192,8 +194,8 @@ about 130 ms more on the corpus above.
   left as it is. Without the flag nothing changes: a non-empty target is still
   `TARGET_OCCUPIED`, and a target that is a file is refused either way.
 
-  In the library it is `overwrite: true` on `unbundle`, `unbundleBytes`,
-  `unbundleFile` and `plan`, and on `TargetValidator`.
+  In the library it is `overwrite: true` on `unbundle`, `unbundleFile` and
+  `plan`.
 
   - A template file that would land on a directory, under a file, or through a
     symlink is a new error, `TARGET_PATH_CONFLICT`, reported before anything is
@@ -227,21 +229,45 @@ about 130 ms more on the corpus above.
   and open with a comment, which both styles keep as written. Regenerating an
   embedded template therefore changes the file once.
 
-- **No false `PROJECT_PARTIAL_OVERLAP` on separator-joined names.** A match
-  counted as "inside a longer word" when any `\w` touched it, and `_` is one,
-  so for `replaces: app_template` the project's own `app_template_test` and
-  `app_template_g` counted as over-reach — warning on every pack, or past 30%
-  refusing it — although rewriting them to `my_app_test` is the point. What
-  continues a word now depends on the casing that matched: for snake, kebab and
-  SCREAMING a letter or digit, for Pascal a following lowercase letter. So
-  `AppTemplateTest` and `MyAppTemplate` are whole words too, while `my_app` in
-  `my_appendix`, `app` in `application` and `MyApp` in `MyApplication` are
-  still caught. Thresholds and messages are unchanged.
-
-  Ratios drop for most tokens. On a fresh `flutter create` project: `app` 83%
-  → 65%, `test` 95% → 73%, `runner` 26% → under 5%, `bin` 75% unchanged.
-
-- Requires Dart 3.13.5; dependencies bumped.
+- **Variable constraints.** `pattern:` (a regex the whole value must match)
+  and `choices:` (the only values allowed, shown by the prompt), enforced as
+  `VARIABLE_PATTERN_MISMATCH` / `VARIABLE_NOT_A_CHOICE`; a pattern that does
+  not compile or a default they reject is caught at pack.
+- **Recorded values** (`plan(recorded: …)`, and what `--vars-file .mold.json`
+  passes): a stamp's values fill the variables after `vars` and before the
+  resolver, and one naming a variable the template has dropped is
+  `VARIABLE_DROPPED` ⚠, not `VARIABLE_UNKNOWN`. A regeneration from a stamp
+  used to fail on the template's first change to its variables.
+- **`mold inspect <archive>`** (`Unbundler.inspect`): the manifest, variables,
+  substitutions and — with `--files` — the files, without unpacking.
+  `--manifest` prints the embedded `mold.yaml` as written
+  (`TemplateInfo.manifestYaml`).
+- **`mold init [dir]`** writes a starting `mold.yaml`: the project's name —
+  from its package manifest (Dart, Node, PHP, Rust, Go, Python, Gradle,
+  Maven, Swift, .NET) or the directory — as one variable's token, the manifest excluded. It runs the
+  pack's checks on the draft and offers the `extra_substitutions` entries
+  `PROJECT_UNCOVERED_CASING` would suggest (`--yes` adds them unasked);
+  `ProjectValidator.onSuggestion` hands them over as data.
+- **`message:`** in the manifest — next steps, rendered with the values
+  like a substitution's `to:` and validated like one — printed after
+  `Unpacked into …`, carried as `message` in `--json` and
+  `UnpackPlan.message`.
+- **`flatCase`** transform: `my_project` → `myproject`, for an Android
+  `applicationId` or a Java package. `PROJECT_UNCOVERED_CASING` now suggests
+  it for a run-together spelling it used to name without a fix.
+- **`-` reads the archive from stdin**, for `unpack` and `inspect`:
+  `curl -sL … | mold unpack - -t app`. Nothing is prompted for — stdin is
+  the archive — and `--target` is required.
+- **`mold pack … --check`**: exit 1 when the committed archive or embed source
+  is not what packing writes now. For CI; writes nothing.
+- **`--stamp`** leaves `.mold.json` in the target — template, version, values
+  and files — kept up to date by every later `--force`. A regeneration then
+  reports the files the template has dropped (`UNPACK_STALE_FILES`, left in
+  place), and…
+- **`--vars-file`** feeds values from a YAML/JSON map or a stamp, with `--var`
+  applied over it.
+- **`--json`** on every command: the result on stdout, warnings inside it, and
+  a failure as `{"errors": […]}` with exit 1.
 
 ## 0.1.3
 

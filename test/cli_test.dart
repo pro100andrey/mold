@@ -28,14 +28,14 @@ void main() {
     test('pack resolves the default <dir>/mold.yaml manifest', () async {
       writeManifest();
       final out = p.join(tmp.path, 'out.mold');
-      final code = await runBundleCli(['pack', project.path, '-o', out]);
+      final code = await runMoldCli(['pack', project.path, '-o', out]);
       expect(code, 0);
       expect(File(out).existsSync(), isTrue);
     });
 
     test('pack with missing manifest and no -m errors with code 64', () async {
       final err = _Sink();
-      final code = await runBundleCli(['pack', project.path], err: err);
+      final code = await runMoldCli(['pack', project.path], err: err);
       expect(code, 64);
       expect(err.text, contains('No manifest'));
     });
@@ -43,10 +43,10 @@ void main() {
     test('pack then unpack round-trips through the CLI', () async {
       writeManifest();
       final archive = p.join(tmp.path, 'out.mold');
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       final target = p.join(tmp.path, 'extracted');
-      expect(await runBundleCli(['unpack', archive, '-t', target]), 0);
+      expect(await runMoldCli(['unpack', archive, '-t', target]), 0);
 
       expect(
         File(p.join(target, 'main.dart')).readAsStringSync(),
@@ -56,13 +56,13 @@ void main() {
 
     test('pack with no source dir errors with code 64', () async {
       final err = _Sink();
-      expect(await runBundleCli(['pack'], err: err), 64);
+      expect(await runMoldCli(['pack'], err: err), 64);
       expect(err.text, contains('Missing'));
     });
 
     test('an unknown command is a usage error (code 64)', () async {
       final err = _Sink();
-      expect(await runBundleCli(['frobnicate'], err: err), 64);
+      expect(await runMoldCli(['frobnicate'], err: err), 64);
       expect(err.text, contains('Could not find a command'));
     });
 
@@ -73,7 +73,7 @@ void main() {
       final blocker = File(p.join(tmp.path, 'blocker'))..writeAsStringSync('');
       final err = _Sink();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         project.path,
         '-o',
@@ -98,11 +98,11 @@ variables:
       ).writeAsStringSync('// super_server\n');
 
       final archive = p.join(tmp.path, 'out.mold');
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       final target = p.join(tmp.path, 'extracted');
       expect(
-        await runBundleCli([
+        await runMoldCli([
           'unpack',
           archive,
           '-t',
@@ -122,7 +122,7 @@ variables:
       writeManifest();
       final out = p.join(tmp.path, 'tpl.dart');
       expect(
-        await runBundleCli(['pack', project.path, '-o', out, '-f', 'bytes']),
+        await runMoldCli(['pack', project.path, '-o', out, '-f', 'bytes']),
         0,
       );
       final src = File(out).readAsStringSync();
@@ -134,7 +134,7 @@ variables:
       writeManifest();
       final out = p.join(tmp.path, 'foo.dart');
       expect(
-        await runBundleCli([
+        await runMoldCli([
           'pack',
           project.path,
           '-o',
@@ -157,7 +157,7 @@ variables:
       // cwd via an explicit -o to keep the test hermetic, asserting the stem.
       final out = p.join(tmp.path, 'super_server.dart');
       expect(
-        await runBundleCli(['pack', project.path, '-o', out, '-f', 'base64']),
+        await runMoldCli(['pack', project.path, '-o', out, '-f', 'base64']),
         0,
       );
       expect(
@@ -180,11 +180,11 @@ variables:
       ).writeAsStringSync('// super_server\n');
 
       final archive = p.join(tmp.path, 'out.mold');
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       final target = p.join(tmp.path, 'extracted');
       expect(
-        await runBundleCli(['unpack', archive, '-t', target, '--no-prompt']),
+        await runMoldCli(['unpack', archive, '-t', target, '--no-prompt']),
         0,
       );
       expect(
@@ -209,10 +209,10 @@ variables:
       ).writeAsStringSync('// super_server\n');
 
       final archive = p.join(tmp.path, 'out.mold');
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       final err = _Sink();
-      final code = await runBundleCli(
+      final code = await runMoldCli(
         ['unpack', archive, '-t', p.join(tmp.path, 'x'), '--no-prompt'],
         err: err,
       );
@@ -234,11 +234,11 @@ variables:
       ).writeAsStringSync('// super_server\n');
 
       final archive = p.join(tmp.path, 'out.mold');
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       final target = p.join(tmp.path, 'never_created');
       final err = _Sink();
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'unpack',
         archive,
         '-t',
@@ -273,10 +273,10 @@ variables:
       ).writeAsStringSync('// super_server\n');
 
       final archive = p.join(tmp.path, 'out.mold');
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       final err = _Sink();
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'unpack',
         archive,
         '-t',
@@ -299,7 +299,7 @@ variables:
       final out = p.join(tmp.path, 'never.mold');
       final err = _Sink();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         project.path,
         '-o',
@@ -328,7 +328,7 @@ variables:
 
       final out = p.join(tmp.path, 'never.mold');
       final err = _Sink();
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         project.path,
         '-o',
@@ -361,7 +361,7 @@ variables:
       ).writeAsStringSync('// super_server\n');
 
       final err = _Sink();
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         project.path,
         '-o',
@@ -377,7 +377,7 @@ variables:
       writeManifest();
       final err = _Sink();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         project.path,
         '-o',
@@ -392,7 +392,7 @@ variables:
 
     test('unpack of a missing archive exits 1', () async {
       final err = _Sink();
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'unpack',
         p.join(tmp.path, 'nope.mold'),
         '-t',
@@ -406,11 +406,11 @@ variables:
     test('unpack defaults the target to the archive stem', () async {
       writeManifest();
       final archive = p.join(tmp.path, 'out.mold');
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       // No -t: the target is ./<stem>, resolved against the current directory.
       final err = _Sink();
-      final code = await runBundleCli(['unpack', archive], err: err);
+      final code = await runMoldCli(['unpack', archive], err: err);
 
       // Either it unpacked into ./out, or ./out was occupied — both prove the
       // default was derived rather than left null.
@@ -432,7 +432,7 @@ variables:
 ''');
       final err = _Sink();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         project.path,
         '--dry-run',
@@ -445,10 +445,10 @@ variables:
     test('unpack with a malformed --var errors with code 64', () async {
       final archive = p.join(tmp.path, 'out.mold');
       writeManifest();
-      expect(await runBundleCli(['pack', project.path, '-o', archive]), 0);
+      expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
       final err = _Sink();
-      final code = await runBundleCli(
+      final code = await runMoldCli(
         ['unpack', archive, '-t', p.join(tmp.path, 'x'), '--var', 'novalue'],
         err: err,
       );

@@ -72,8 +72,8 @@ is unavailable.
 
 ## Contents
 
-- [Install](#install) · [Quick start](#quick-start) · [Commands](#commands)
-- [The manifest](#the-manifest-moldyaml) — [file selection](#file-selection) · [variables](#variables) · [substitutions](#substitutions) · [path renames](#path-renames) · [verbatim files](#verbatim-files)
+- [Install](#install) · [Quick start](#quick-start) · [Commands](#commands) · [`init`](#starting-a-manifest)
+- [The manifest](#the-manifest-moldyaml) — [file selection](#file-selection) · [variables](#variables) · [substitutions](#substitutions) · [path renames](#path-renames) · [verbatim files](#verbatim-files) · [message](#message)
 - [Interpolation and transforms](#interpolation-and-transforms)
 - [Choosing a `replaces` token](#choosing-a-replaces-token)
 - [Previewing](#previewing-a-rename)
@@ -86,7 +86,8 @@ is unavailable.
 ## Quick start
 
 ```sh
-# 1. Describe the rename beside the project you already have.
+# 1. Describe the rename beside the project you already have —
+#    `mold init ./super_server` writes a start — or by hand:
 cat > ./super_server/mold.yaml <<'YAML'
 name: super_server
 version: 1.0.0
@@ -108,6 +109,15 @@ mold unpack super_server.mold -t ./my_project --var project_name=my_project
 ## Commands
 
 ```shell
+mold init [dir] [options]
+  --token          The name to replace        (default: detected, see below)
+  --variable       The variable replacing it  (default: project_name)
+  --yes,      -y   Add the suggested extra_substitutions without asking
+  --no-prompt      Never ask; leave the suggestions out
+  --force          Overwrite an existing mold.yaml
+  --dry-run        Print the manifest on stdout instead of writing it
+  --json           Print the result as JSON on stdout
+
 mold pack <source_dir> [options]
   --manifest, -m   Path to the manifest      (default: <source_dir>/mold.yaml;
                                               error if absent and -m not given)
@@ -124,7 +134,7 @@ mold pack <source_dir> [options]
   --check          Exit 1 if the output file is stale; write nothing
   --json           Print the result as JSON on stdout
 
-mold unpack <source> [options]
+mold unpack <source | -> [options]
   --target,   -t   Destination dir            (default: ./<source-stem>)
   --var,      -v   key=value                  (repeatable; overrides the file)
   --vars-file      YAML/JSON values, or a .mold.json stamp
@@ -135,10 +145,36 @@ mold unpack <source> [options]
   --diff           Also show a unified diff (implies --dry-run)
   --json           Print the plan as JSON on stdout
 
-mold inspect <archive> [options]
+mold inspect <archive | -> [options]
   --files          Also list every file, with its size
+  --manifest       Print the embedded mold.yaml as written, on stdout
   --json           Print the description as JSON on stdout
 ```
+
+### Starting a manifest
+
+`mold init ./app_template` writes a starting `mold.yaml`: the project's own
+name as the `replaces` token of one variable, `project_name`, and the manifest
+itself excluded from what it packs. The name is read from the project's
+package manifest — `pubspec.yaml`, `package.json`, `composer.json`,
+`Cargo.toml`, `go.mod`, `pyproject.toml`, `settings.gradle(.kts)`, `pom.xml`,
+`Package.swift` or a lone `*.csproj` — else taken from the directory;
+`--token` names it instead.
+
+It then runs the pack's checks on that draft. Spellings of the name the four
+derived casings miss are offered as `extra_substitutions` entries — on a fresh
+Flutter project, the bundle id and the display name:
+
+```text
+Spellings of the name no derived casing covers:
+  'appTemplate' → {{ project_name | camelCase }}  (2 files)
+  'App Template' → {{ project_name | titleCase }}  (1 file)
+Add them to extra_substitutions? [Y/n]
+```
+
+Everything else the pack would say — a token too generic, a suspected secret
+— is reported as a warning, and the manifest is written anyway: it is a start,
+to review with `mold pack ./app_template --dry-run`.
 
 ### Unpacking into a non-empty directory
 
@@ -165,6 +201,20 @@ target rather than through a scratch directory: moving a tree into an occupied
 directory is one rename per file, so it would be no more atomic, and a scratch
 directory can sit on another filesystem, where a rename is a copy.
 
+### Reading the archive from stdin
+
+`-` in place of the archive reads it from stdin, so a template on a server
+needs no intermediate file:
+
+```sh
+curl -sL https://example.com/app.mold | mold unpack - -t ./my_app --var name=my_app
+```
+
+stdin then carries the archive, so nothing can be prompted for: values come
+from `--var`, `--vars-file` and defaults, as under `--no-prompt`, and
+`--target` is required — there is no file name to derive it from.
+`mold inspect -` works the same way.
+
 `mold help <command>` for the full option list. During development:
 `dart run mold:mold pack ./super_server`.
 
@@ -182,6 +232,8 @@ name and version, the variables it asks for (with defaults, patterns and
 choices), its explicit substitutions, and — with `--files` — what it holds. It
 runs the archive and manifest checks an unpack runs, so a template that
 inspects cleanly can fail an unpack only on its variables or its target.
+`--manifest` prints the embedded `mold.yaml` itself, as written — on stdout,
+so `mold inspect app.mold --manifest > mold.yaml` recovers it.
 
 ### Checking a committed archive in CI
 
@@ -305,6 +357,9 @@ path_renames: []            # from/to, applied to PATHS only
 # ─── copied verbatim ────────────────────────────────────────
 no_substitute: []           # globs; content untouched, path still renamed
 binary_extensions: []       # extra extensions treated as binary
+
+# ─── after unpacking ────────────────────────────────────────
+message: null               # shown once unpacked; a template like `to:`
 ```
 
 Values are read as written: an unquoted `version: 1.10` is `1.10`, not the
@@ -369,13 +424,20 @@ The source spelling does not matter: `super_server`, `superServer`,
 indistinguishable from snake_case, so deriving it would be ambiguous — reach it
 with an explicit transform instead (below).
 
+The value given for a `replaces` variable must be something the casings can be
+derived from: ASCII letters, digits, spaces, `_` and `-`, with at least one
+letter — `3d-viewer` is fine, `123` and `my/app` are `VARIABLE_INVALID_FORMAT`.
+Anything a particular language forbids on top of that, such as a leading digit
+in a Dart package name, belongs in the variable's `pattern`.
+
 A variable **without** `replaces` contributes no renames; it exists to be
 interpolated. One that is neither used as a token nor referenced by any
 substitution warns as `MANIFEST_UNUSED_VARIABLE`.
 
 A variable can constrain its value: `pattern` is a regular expression the
 **whole** value must match (it is anchored for you), and `choices` lists the
-only values allowed — the prompt shows them.
+only values allowed — the prompt shows them, and asks again for an answer
+outside them rather than failing the unpack after every other prompt.
 
 ```yaml
 variables:
@@ -455,11 +517,29 @@ binary_extensions:            # on top of the built-in set
 A file whose extension says text but whose bytes are not valid UTF-8 is also
 copied verbatim rather than failing the unpack.
 
+### Message
+
+What to tell the person once the project exists — the next steps, usually:
+
+```yaml
+message: |
+  Next:
+    cd {{ project_name }}
+    dart pub get
+    dart run bin/{{ project_name | snakeCase }}.dart
+```
+
+`mold unpack` prints it, rendered, after `Unpacked into …` — not on a dry
+run. It is a template like a substitution's `to:` and is validated like one;
+a variable it names counts as used. `--json` carries it as `message`, and
+`UnpackPlan.message` holds it rendered.
+
 ---
 
 ## Interpolation and transforms
 
-Only the `to:` side of a substitution or path rename is a template.
+Only the `to:` side of a substitution or path rename is a template, and the
+[`message`](#message).
 
 ```text
 {{ variable }}                 the resolved value, unchanged
@@ -475,6 +555,7 @@ Only the `to:` side of a substitution or path rename is a template.
 | `pascalCase`    | `my_project` | `MyProject`  |
 | `screamingCase` | `my_project` | `MY_PROJECT` |
 | `titleCase`     | `my_project` | `My Project` |
+| `flatCase`      | `my_project` | `myproject`  |
 | `pathCase`      | `com.acme`   | `com/acme`   |
 
 Whitespace inside the braces is insignificant. Chaining (`{{ a | x | y }}`) is
@@ -587,7 +668,9 @@ The same pass reports other things worth knowing at pack:
   made to be shared;
 - a path that cannot exist everywhere — `PROJECT_PATH_NOT_PORTABLE`: two that
   differ only in case (one file on macOS and Windows), or a name Windows
-  refuses (`aux.txt`, `a:b`, a trailing dot).
+  refuses (`aux.txt`, `a:b`, a trailing dot). A warning, since the template
+  unpacks fine elsewhere; unpacking it on Windows is `RENAME_INVALID_NAME`,
+  before anything is written.
 
 At unpack, a variable's **value** is checked against the template:
 `VARIABLE_VALUE_PRESENT` when a casing of it already occurs there as a word.
@@ -739,6 +822,7 @@ stderr.
 | unpack | `TARGET_PATH_CONFLICT`              | `--force`: a path is blocked in the target     |
 | unpack | `RENAME_UNSAFE_PATH`                | a renamed path escapes the target              |
 | unpack | `RENAME_CASE_COLLISION` ⚠           | renamed paths differ only in case              |
+| unpack | `RENAME_INVALID_NAME`               | on Windows: a path Windows cannot create       |
 | unpack | `UNPACK_STALE_FILES` ⚠              | files the template dropped, left in place      |
 | unpack | `UNPACK_STAMP_INVALID` ⚠            | the target's `.mold.json` is not a stamp       |
 | unpack | `UNPACK_STAMP_FOREIGN` ⚠            | the target's stamp is another template's       |
@@ -880,8 +964,8 @@ final plan = unbundler.plan(
 );
 ```
 
-`inspect` describes an archive without unpacking it — its `manifest`, each
-file's size, which are executable.
+`inspect` describes an archive without unpacking it — its `manifest` (and
+`manifestYaml`, as written), each file's size, which are executable.
 
 ### Prompting
 

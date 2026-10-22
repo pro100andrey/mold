@@ -11,12 +11,18 @@ import 'command_base.dart';
 /// archive and manifest checks an unpack would, so a template that inspects
 /// cleanly can fail an unpack only on its variables or its target.
 class InspectCommand extends MoldCommand {
-  InspectCommand(super.out, super.err) {
-    argParser.addFlag(
-      'files',
-      negatable: false,
-      help: 'Also list every file, with its size.',
-    );
+  InspectCommand(super.out, super.err, {super.input}) {
+    argParser
+      ..addFlag(
+        'files',
+        negatable: false,
+        help: 'Also list every file, with its size.',
+      )
+      ..addFlag(
+        'manifest',
+        negatable: false,
+        help: 'Print the embedded mold.yaml as written, on stdout.',
+      );
   }
 
   @override
@@ -27,7 +33,7 @@ class InspectCommand extends MoldCommand {
       'Describe a template archive: its manifest, variables and files.';
 
   @override
-  String get invocation => 'mold inspect <archive> [options]';
+  String get invocation => 'mold inspect <archive | -> [options]';
 
   @override
   Future<int> execute(ArgResults results) async {
@@ -36,12 +42,17 @@ class InspectCommand extends MoldCommand {
     }
 
     final info = const Unbundler().inspect(
-      Unbundler.readArchive(results.rest.first),
+      await readArchiveSource(results.rest.first),
       onWarning: warn,
     );
 
+    final withManifest = results['manifest'] as bool;
     if (wantsJson) {
-      emitJson(_json(info));
+      emitJson(_json(info, withManifest: withManifest));
+    } else if (withManifest) {
+      // The file itself, not a description of it: on stdout, where
+      // `> mold.yaml` takes it.
+      out.write(info.manifestYaml);
     } else {
       _print(info, withFiles: results['files'] as bool);
     }
@@ -53,7 +64,7 @@ class InspectCommand extends MoldCommand {
     final m = info.manifest;
     err.writeln(
       '${m.name} ${m.version} — ${info.sizes.length} files, '
-      '${info.totalBytes} bytes, ${info.executable.length} executable.',
+      '${_size(info.totalBytes)}, ${info.executable.length} executable.',
     );
 
     if (m.variables.isNotEmpty) {
@@ -86,16 +97,26 @@ class InspectCommand extends MoldCommand {
     rules('Extra substitutions', m.extraSubstitutions);
     rules('Path renames', m.pathRenames);
 
+    if (m.message case final message?) {
+      err.writeln('\nMessage after unpacking:');
+      for (final line in message.trimRight().split('\n')) {
+        err.writeln('  $line');
+      }
+    }
+
     if (withFiles) {
       err.writeln('\nFiles:');
       for (final MapEntry(key: path, value: size) in info.sizes.entries) {
         final mark = info.executable.contains(path) ? '  (executable)' : '';
-        err.writeln('  $path  $size$mark');
+        err.writeln('  $path  ${_size(size)}$mark');
       }
     }
   }
 
-  static Map<String, Object?> _json(TemplateInfo info) {
+  static Map<String, Object?> _json(
+    TemplateInfo info, {
+    required bool withManifest,
+  }) {
     final m = info.manifest;
     List<Map<String, String>> rules(List<Substitution> items) => [
       for (final s in items) {'from': s.from, 'to': s.to},
@@ -104,6 +125,7 @@ class InspectCommand extends MoldCommand {
     return {
       'name': m.name,
       'version': m.version,
+      if (withManifest) 'manifestYaml': info.manifestYaml,
       'variables': [
         for (final v in m.variables)
           {
@@ -117,6 +139,7 @@ class InspectCommand extends MoldCommand {
       ],
       'extraSubstitutions': rules(m.extraSubstitutions),
       'pathRenames': rules(m.pathRenames),
+      'message': m.message,
       'files': [
         for (final MapEntry(key: path, value: size) in info.sizes.entries)
           {
@@ -127,4 +150,21 @@ class InspectCommand extends MoldCommand {
       ],
     };
   }
+}
+
+/// [bytes] for a person: exact below a kilobyte, otherwise in decimal units
+/// to one place — `48.3 MB`, the scale the size is read at.
+String _size(int bytes) {
+  if (bytes < 1000) {
+    return '$bytes bytes';
+  }
+  const units = ['kB', 'MB', 'GB'];
+  var value = bytes / 1000;
+  var unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+
+  return '${value.toStringAsFixed(1)} ${units[unit]}';
 }

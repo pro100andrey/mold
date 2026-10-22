@@ -147,6 +147,7 @@ Map<String, Object?> planJson(
     'overwrite': plan.overwrite,
     'applied': applied,
     'values': plan.values,
+    'message': plan.message,
     'summary': {
       'files': plan.templateFiles.length,
       'stamp': plan.files.any((f) => f.generated),

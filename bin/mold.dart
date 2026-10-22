@@ -6,5 +6,5 @@ import 'package:mold/src/cli/cli.dart';
 /// command logic lives in `lib/src/cli/cli.dart` so it can be unit-tested
 /// without `exit()`.
 Future<void> main(List<String> args) async {
-  exitCode = await runBundleCli(args);
+  exitCode = await runMoldCli(args);
 }

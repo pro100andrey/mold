@@ -11,11 +11,11 @@ import 'plan_report.dart';
 
 /// `mold unpack <source>` — materialize a project from an archive.
 class UnpackCommand extends MoldCommand {
-  UnpackCommand(super.out, super.err) {
+  UnpackCommand(super.out, super.err, {super.input}) {
     argParser.addOption(
       'target',
       abbr: 't',
-      help: 'Destination dir (default: ./<name>).',
+      help: 'Destination dir (default: ./<name>; required with -).',
     );
     addVarOptions('');
     argParser
@@ -58,7 +58,7 @@ class UnpackCommand extends MoldCommand {
       'Unpack a template archive into a target directory.';
 
   @override
-  String get invocation => 'mold unpack <source> [options]';
+  String get invocation => 'mold unpack <source | -> [options]';
 
   @override
   Future<int> execute(ArgResults results) async {
@@ -66,14 +66,22 @@ class UnpackCommand extends MoldCommand {
       throw const CliException('Missing <source>.');
     }
     final source = results.rest.first;
+    final fromStdin = MoldCommand.isStdin(source);
 
-    final targetDir =
-        (results['target'] as String?) ??
-        './${p.basenameWithoutExtension(source)}';
+    final target = results['target'] as String?;
+    if (fromStdin && target == null) {
+      throw const CliException(
+        'Reading the archive from stdin (-) needs --target: there is no '
+        'file name to default it from.',
+      );
+    }
+    final targetDir = target ?? './${p.basenameWithoutExtension(source)}';
     final (:vars, :recorded) = varsOf(results);
 
     final resolver = VariableResolver(
-      noPrompt: results['no-prompt'] as bool,
+      // stdin carries the archive, so there is nothing left to read answers
+      // from: values come from --var, --vars-file and defaults.
+      noPrompt: fromStdin || results['no-prompt'] as bool,
       // Prompts are for a person, so they go where people read: stderr,
       // never into a --json document.
       prompter: VariablePrompter(err, stdin.readLineSync),
@@ -88,7 +96,7 @@ class UnpackCommand extends MoldCommand {
     // same computation.
     const unbundler = Unbundler();
     final plan = unbundler.plan(
-      bytes: Unbundler.readArchive(source),
+      bytes: await readArchiveSource(source),
       targetDir: targetDir,
       vars: vars,
       recorded: recorded,
@@ -109,6 +117,9 @@ class UnpackCommand extends MoldCommand {
       printPlan(err, plan, showDiff: showDiff, applied: false);
     } else {
       err.writeln('Unpacked into $targetDir.');
+      if (plan.message case final message?) {
+        err.writeln('\n${message.trimRight()}');
+      }
     }
 
     return 0;

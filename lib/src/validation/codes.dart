@@ -192,6 +192,10 @@ abstract final class MoldCode {
   /// ⚠ Two destinations differ only in case.
   static const String renameCaseCollision = RenameValidator.caseCollision;
 
+  /// On Windows: a renamed path Windows cannot create — a reserved device
+  /// name, `<>:"|?*` or a control character, a trailing dot or space.
+  static const String renameInvalidName = RenameValidator.invalidName;
+
   // ─── write (unpack) ───────────────────────────────────────────────────────
 
   /// ⚠ `chmod` failed; files are written but not executable.

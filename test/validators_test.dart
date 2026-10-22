@@ -124,6 +124,23 @@ extra_substitutions:
         );
       });
 
+      test('the message is checked like a substitution', () {
+        final m = Manifest.fromYaml('''
+name: x
+version: 1
+variables:
+  shown: {}
+message: "cd {{ shown | snakeCase }} {{ missing }} {{ shown | nope }}"
+''');
+        final r = validator.validate(m);
+        final codes = [...r.errors, ...r.warnings].map((e) => e.code);
+
+        expect(codes, contains(ManifestValidator.unknownVariable));
+        expect(codes, contains(ManifestValidator.unknownTransform));
+        // Named by the message, so not unused.
+        expect(codes, isNot(contains(ManifestValidator.unusedVariable)));
+      });
+
       test('MANIFEST_UNKNOWN_TRANSFORM', () {
         final m = Manifest.fromYaml('''
 name: x
@@ -350,10 +367,20 @@ variables:
         final r = validator.validate(
           const VariablesInput(
             variables: [projectName],
-            values: {'p': '1-bad start'},
+            values: {'p': 'bad/name'},
           ),
         );
         expect(r, rejectsWith(VariablesValidator.invalidFormat));
+      });
+
+      test('a leading digit is a name; digits alone are not', () {
+        ValidationResult check(String value) => validator.validate(
+          VariablesInput(variables: [projectName], values: {'p': value}),
+        );
+
+        expect(check('3d_viewer').isValid, isTrue);
+        expect(check('2fast').isValid, isTrue);
+        expect(check('123'), rejectsWith(VariablesValidator.invalidFormat));
       });
     });
   });

@@ -33,6 +33,7 @@ void main() {
         ],
         noSubstitute: ['pubspec.lock', '**/*.g.dart'],
         binaryExtensions: ['myblob'],
+        message: 'cd {{ project_name }}\n  dart pub get\n',
       );
 
       // One assertion over the whole value, so a field added to Manifest but
@@ -81,6 +82,21 @@ void main() {
       expect(parsed.extraSubstitutions.first.to, '');
       expect(parsed.extraSubstitutions[1].from, r'C:\path "quoted"');
       expect(parsed.extraSubstitutions[1].to, 'a\tb');
+    });
+
+    test('escapes control characters YAML cannot hold as written', () {
+      const original = Manifest(
+        name: 'x',
+        version: '1',
+        extraSubstitutions: [
+          Substitution(from: 'a\x00b\x1bc\x7fd', to: 'e\x85f\x9fg'),
+        ],
+      );
+
+      final parsed = Manifest.fromYaml(original.toYaml());
+
+      expect(parsed.extraSubstitutions.single.from, 'a\x00b\x1bc\x7fd');
+      expect(parsed.extraSubstitutions.single.to, 'e\x85f\x9fg');
     });
 
     test('omits empty sections', () {

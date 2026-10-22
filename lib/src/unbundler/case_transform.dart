@@ -28,6 +28,10 @@ enum CaseTransform {
   /// `My Project`
   titleCase,
 
+  /// `myproject` — the words run together, lowercase: an Android
+  /// `applicationId` segment, a Go or Java package name.
+  flatCase,
+
   /// `com.acme` → `com/acme`
   ///
   /// The one transform that is not a case conversion: it swaps `.` for `/` and
@@ -47,6 +51,7 @@ enum CaseTransform {
       .pascalCase => converter.toPascal(value),
       .screamingCase => converter.toScreamingSnake(value),
       .titleCase => converter.toTitle(value),
+      .flatCase => converter.toFlat(value),
       .pathCase => converter.toPath(value),
     };
   }

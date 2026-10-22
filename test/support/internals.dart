@@ -22,7 +22,9 @@ export 'package:mold/src/bundler/gitignore.dart' show GitignoreRules;
 export 'package:mold/src/bundler/project_validator.dart'
     show ProjectInput, ProjectValidator;
 export 'package:mold/src/cli/cli.dart'
-    show CliException, buildRunner, runBundleCli;
+    show CliException, buildRunner, runMoldCli;
+export 'package:mold/src/cli/init_command.dart'
+    show InitCommand, detectProjectName;
 export 'package:mold/src/manifest/content_policy.dart' show ContentPolicy;
 export 'package:mold/src/manifest/manifest.dart'
     show Manifest, Substitution, TemplateVariable;

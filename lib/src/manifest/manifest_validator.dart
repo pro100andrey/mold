@@ -251,9 +251,16 @@ class ManifestValidator extends ValidatorBase<Manifest> {
     final issues = <ValidationError>[];
     final referenced = <String>{};
 
-    for (final substitution in input.replacementTemplates) {
-      final from = substitution.from;
-      final template = SubstitutionTemplate.parse(substitution.to);
+    // The message renders like a `to:`, so it is checked like one — and a
+    // variable it names is used.
+    final templates = [
+      for (final s in input.replacementTemplates)
+        (field: s.from, text: s.to, what: "Substitution '${s.from}'"),
+      if (input.message case final text?)
+        (field: 'message', text: text, what: 'The message'),
+    ];
+    for (final (:field, :text, :what) in templates) {
+      final template = SubstitutionTemplate.parse(text);
       for (final error in template.errors) {
         issues.add(
           ValidationError(
@@ -263,7 +270,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
               .unknownTransform => unknownTransform,
             },
             error.message,
-            field: from,
+            field: field,
           ),
         );
       }
@@ -273,9 +280,9 @@ class ManifestValidator extends ValidatorBase<Manifest> {
           issues.add(
             ValidationError(
               unknownVariable,
-              "Substitution '$from' references '{{ $name }}', which is not a "
-              'declared variable.',
-              field: from,
+              "$what references '{{ $name }}', which is not a declared "
+              'variable.',
+              field: field,
             ),
           );
         }
@@ -288,7 +295,8 @@ class ManifestValidator extends ValidatorBase<Manifest> {
           .warning(
             unusedVariable,
             "Variable '${variable.name}' has no 'replaces' and is not "
-            'referenced by any substitution, so it does nothing.',
+            'referenced by any substitution or the message, so it does '
+            'nothing.',
             field: variable.name,
           ),
         );

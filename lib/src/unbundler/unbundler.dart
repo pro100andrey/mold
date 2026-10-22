@@ -278,7 +278,9 @@ class Unbundler {
       // collision like any other, not a file the stamp silently replaces.
       if (writeStamp) _stampKey: UnpackStamp.fileName,
     };
-    const RenameValidator().validate(renames).report(onWarning);
+    RenameValidator(
+      windows: Platform.isWindows,
+    ).validate(renames).report(onWarning);
 
     if (inspect != null) {
       target.validateDestinations(inspect, renames.values).report(onWarning);
@@ -532,6 +534,7 @@ class Unbundler {
 
     return TemplateInfo(
       manifest: manifest,
+      manifestYaml: archive.manifestYaml,
       sizes: {
         for (final MapEntry(:key, :value) in archive.files.entries)
           key: value.length,
@@ -649,6 +652,9 @@ class Unbundler {
   ///
   /// Overwritten files keep their mode: the content is replaced in place, and
   /// the executable bit is added where the template has it, never removed.
+  ///
+  /// Throws an [ArgumentError] for a plan made without a `targetDir`: it can
+  /// be shown, but there is nowhere to write it.
   Future<void> apply(UnpackPlan plan, {WarningSink? onWarning}) async {
     final targetDir = plan.targetDir;
     if (targetDir == null) {
@@ -1147,12 +1153,16 @@ class _Rules {
 class TemplateInfo {
   const TemplateInfo({
     required this.manifest,
+    required this.manifestYaml,
     required this.sizes,
     this.executable = const {},
   });
 
   /// The embedded manifest.
   final Manifest manifest;
+
+  /// The embedded `mold.yaml`, as written.
+  final String manifestYaml;
 
   /// Each file's path inside the archive — before renaming — and its size in
   /// bytes, in archive order.

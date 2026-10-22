@@ -1,7 +1,8 @@
 import 'validation_error.dart';
 
-/// Thrown by [ValidationResult.throwIfInvalid] when error-severity issues are
-/// present.
+/// Thrown when an input — the manifest, the project, the archive, the
+/// variables or the target — has error-severity issues; each carries a code
+/// from `MoldCode`.
 class ValidationException implements Exception {
   ValidationException(this.errors);
 
@@ -40,7 +41,7 @@ class ValidationResult {
   /// Warning-severity issues (advisory; do not block).
   final List<ValidationError> warnings;
 
-  /// True when there are no error-severity issues.
+  /// Whether there are no error-severity issues.
   bool get isValid => errors.isEmpty;
 
   /// Emits every warning to [onWarning], then throws if there are errors.

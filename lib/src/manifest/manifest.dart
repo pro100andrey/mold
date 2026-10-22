@@ -152,6 +152,7 @@ class Manifest {
     this.noSubstitute = const [],
     this.binaryExtensions = const [],
     this.useGitignore = true,
+    this.message,
     this.source,
     this.path,
     this.unknownKeys = const {},
@@ -203,6 +204,7 @@ class Manifest {
       noSubstitute: _stringList(doc.nodes['no_substitute']),
       binaryExtensions: _stringList(doc.nodes['binary_extensions']),
       useGitignore: _bool(doc['use_gitignore'], 'use_gitignore', true),
+      message: textAt(doc, 'message'),
       source: text,
       path: path,
       unknownKeys: unknown,
@@ -239,6 +241,7 @@ class Manifest {
     'path_renames',
     'no_substitute',
     'binary_extensions',
+    'message',
   ];
 
   /// The keys a variable's mapping may hold.
@@ -372,6 +375,13 @@ class Manifest {
   /// exactly as it sits on disk.
   final bool useGitignore;
 
+  /// What to tell the person once the project is unpacked — next steps, a
+  /// command to run — or null for nothing.
+  ///
+  /// A template like a substitution's `to:`: `{{ name }}` and
+  /// `{{ name | transform }}` render with the resolved values.
+  final String? message;
+
   /// The verbatim YAML this manifest was parsed from, when available. Embedded
   /// into the archive as `mold.yaml`.
   final String? source;
@@ -437,7 +447,8 @@ class Manifest {
       _listEquals(other.pathRenames, pathRenames) &&
       _listEquals(other.noSubstitute, noSubstitute) &&
       _listEquals(other.binaryExtensions, binaryExtensions) &&
-      other.useGitignore == useGitignore;
+      other.useGitignore == useGitignore &&
+      other.message == message;
 
   @override
   int get hashCode => Object.hash(
@@ -451,6 +462,7 @@ class Manifest {
     Object.hashAll(noSubstitute),
     Object.hashAll(binaryExtensions),
     useGitignore,
+    message,
   );
 
   /// Field-by-field, so a failed round-trip assertion names the field that
@@ -462,7 +474,7 @@ class Manifest {
       'extraSubstitutions: $extraSubstitutions, '
       'pathRenames: $pathRenames, '
       'noSubstitute: $noSubstitute, binaryExtensions: $binaryExtensions, '
-      'useGitignore: $useGitignore)';
+      'useGitignore: $useGitignore, message: $message)';
 
   /// Renders this manifest back to YAML, for embedding a manifest that was
   /// built in code rather than read from a file (where [source] is null).
@@ -532,6 +544,10 @@ class Manifest {
     _writeList(buffer, 'no_substitute', noSubstitute);
     _writeList(buffer, 'binary_extensions', binaryExtensions);
 
+    if (message case final text?) {
+      buffer.writeln('message: ${_scalar(text)}');
+    }
+
     return buffer.toString();
   }
 
@@ -581,9 +597,21 @@ class Manifest {
         .replaceAll('"', r'\"')
         .replaceAll('\n', r'\n')
         .replaceAll('\r', r'\r')
-        .replaceAll('\t', r'\t');
+        .replaceAll('\t', r'\t')
+        // YAML allows only printable characters in a scalar: every other
+        // control character must be an escape to read back.
+        .replaceAllMapped(_nonPrintable, (m) {
+          final hex = m[0]!.codeUnitAt(0).toRadixString(16).padLeft(2, '0');
+          return '\\x$hex';
+        });
     return '"$escaped"';
   }
+
+  /// The C0 and C1 controls and DEL that YAML's printable set leaves out;
+  /// tab, line feed, carriage return and NEL are printable.
+  static final _nonPrintable = RegExp(
+    r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F]',
+  );
 
   /// Reads an optional boolean field, falling back to [fallback] when absent.
   ///

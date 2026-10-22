@@ -19,11 +19,20 @@ import '../validation/validator_base.dart';
 /// last. A template that cannot round-trip its own files must not be unpacked
 /// at all.
 class RenameValidator extends ValidatorBase<Map<String, String>> {
-  const RenameValidator();
+  const RenameValidator({this.windows = false});
+
+  /// Whether the destinations must be names Windows can create.
+  ///
+  /// Pack only warns about such names (`PROJECT_PATH_NOT_PORTABLE`): the
+  /// template is fine wherever it can be unpacked. Unpacking one on Windows
+  /// is where it fails — `a:b` opens an alternate data stream of `a`, `CON`
+  /// the console — so there it is refused before anything is written.
+  final bool windows;
 
   static const collision = 'RENAME_COLLISION';
   static const unsafePath = 'RENAME_UNSAFE_PATH';
   static const caseCollision = 'RENAME_CASE_COLLISION';
+  static const invalidName = 'RENAME_INVALID_NAME';
 
   @override
   String get phase => 'rename';
@@ -50,6 +59,21 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
     ];
     if (unsafe.isNotEmpty) {
       return ValidationResult(unsafe);
+    }
+    if (windows) {
+      final invalid = [
+        for (final MapEntry(key: from, value: to) in input.entries)
+          if (windowsProblem(to) case final problem?)
+            ValidationError(
+              invalidName,
+              "Archive entry 'files/$from' cannot be written to '$to' on "
+              'Windows: $problem.',
+              field: from,
+            ),
+      ];
+      if (invalid.isNotEmpty) {
+        return ValidationResult(invalid);
+      }
     }
 
     // Two passes so the common case — every destination distinct — allocates

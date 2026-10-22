@@ -21,7 +21,7 @@ void main() {
   Future<(int, String, String)> mold(List<String> args) async {
     final out = StringBuffer();
     final err = StringBuffer();
-    final code = await runBundleCli(args, out: out, err: err);
+    final code = await runMoldCli(args, out: out, err: err);
 
     return (code, out.toString(), err.toString());
   }
@@ -261,6 +261,119 @@ no_substitute: [notes.txt]
     });
   });
 
+  group('message', () {
+    setUp(() async {
+      final manifest = File(p.join(project.path, 'mold.yaml'));
+      manifest.writeAsStringSync(
+        '${manifest.readAsStringSync()}'
+        'message: |\n'
+        '  Next:\n'
+        '    cd {{ name }}\n'
+        '    open lib/{{ name | snakeCase }}.dart\n',
+      );
+      final (code, _, err) = await mold(['pack', project.path, '-o', archive]);
+      expect(code, 0, reason: err);
+    });
+
+    test('is printed, rendered, after an unpack', () async {
+      final (code, _, err) = await mold([
+        'unpack',
+        archive,
+        '-t',
+        target(),
+        '--var',
+        'name=my-app',
+        '--no-prompt',
+      ]);
+
+      expect(code, 0, reason: err);
+      expect(err, contains('Next:\n  cd my-app\n  open lib/my_app.dart'));
+    });
+
+    test('not on a dry run', () async {
+      final (_, _, err) = await mold([
+        'unpack',
+        archive,
+        '-t',
+        target(),
+        '--var',
+        'name=my_app',
+        '--no-prompt',
+        '--dry-run',
+      ]);
+
+      expect(err, isNot(contains('Next:')));
+    });
+
+    test('is in the JSON plan', () async {
+      final (_, out, _) = await mold([
+        'unpack',
+        archive,
+        '-t',
+        target(),
+        '--var',
+        'name=my_app',
+        '--no-prompt',
+        '--json',
+      ]);
+      final doc = jsonDecode(out) as Map<String, Object?>;
+
+      expect(doc['message'], startsWith('Next:\n  cd my_app\n'));
+    });
+  });
+
+  group('reading the archive from stdin', () {
+    Future<(int, String)> piped(List<String> args) async {
+      final err = StringBuffer();
+      final code = await runMoldCli(
+        args,
+        out: StringBuffer(),
+        err: err,
+        input: Stream.value(File(archive).readAsBytesSync()),
+      );
+
+      return (code, err.toString());
+    }
+
+    test('unpack - reads it, without prompting', () async {
+      final (code, err) = await piped([
+        'unpack',
+        '-',
+        '-t',
+        target(),
+        '--var',
+        'name=my_app',
+      ]);
+
+      expect(code, 0, reason: err);
+      expect(File(p.join(target(), 'lib', 'my_app.dart')).existsSync(), isTrue);
+    });
+
+    test(
+      'unpack - with a variable left unanswered is VARIABLE_MISSING',
+      () async {
+        final (code, err) = await piped(['unpack', '-', '-t', target()]);
+
+        expect(code, 1);
+        expect(err, contains(MoldCode.variableMissing));
+      },
+    );
+
+    test('unpack - needs --target', () async {
+      final (code, err) = await piped(['unpack', '-']);
+
+      expect(code, 64);
+      expect(err, contains('needs --target'));
+    });
+
+    test('inspect - reads it too', () async {
+      final (code, err) = await piped(['inspect', '-']);
+
+      expect(code, 0);
+      expect(err, contains('super_server 1.2.0'));
+    });
+  });
+
   group('inspect', () {
     test('describes the template without unpacking it', () async {
       final (code, _, err) = await mold(['inspect', archive]);
@@ -291,6 +404,37 @@ no_substitute: [notes.txt]
         (doc['variables']! as List<Object?>).first,
         containsPair('replaces', 'super_server'),
       );
+    });
+
+    test('sizes are readable', () async {
+      write(project, 'assets/data.txt', 'x' * 1500);
+      expect((await mold(['pack', project.path, '-o', archive])).$1, 0);
+
+      final (_, _, err) = await mold(['inspect', archive, '--files']);
+
+      expect(err, contains('4 files, 1.8 kB'));
+      expect(err, contains('assets/data.txt  1.5 kB'));
+      expect(err, contains('lib/super_server.dart  16 bytes'));
+    });
+
+    test('--manifest prints the embedded mold.yaml on stdout', () async {
+      final (code, out, err) = await mold(['inspect', archive, '--manifest']);
+
+      expect(code, 0);
+      expect(out, File(p.join(project.path, 'mold.yaml')).readAsStringSync());
+      expect(err, isEmpty);
+    });
+
+    test('--manifest --json carries it as manifestYaml', () async {
+      final (_, out, _) = await mold([
+        'inspect',
+        archive,
+        '--manifest',
+        '--json',
+      ]);
+      final doc = jsonDecode(out) as Map<String, Object?>;
+
+      expect(doc['manifestYaml'], startsWith('name: super_server\n'));
     });
 
     test('a missing archive is ARCHIVE_NOT_FOUND', () async {

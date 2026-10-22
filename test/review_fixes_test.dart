@@ -45,7 +45,7 @@ void main() {
       );
       final err = StringBuffer();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         src.path,
         '-m',
@@ -150,7 +150,7 @@ variables:
       File('${tmp.path}/t.mold').writeAsBytesSync(archive);
       final err = StringBuffer();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'unpack',
         '${tmp.path}/t.mold',
         '-t',

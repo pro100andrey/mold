@@ -17,10 +17,12 @@ class _Rule {
 
   final List<Glob> globs;
 
-  /// A `!` rule, which *un*-ignores a path an earlier rule caught.
+  /// Whether this is a `!` rule, which *un*-ignores a path an earlier rule
+  /// caught.
   final bool negated;
 
-  /// A trailing-slash rule, which matches directories but never files.
+  /// Whether this is a trailing-slash rule, which matches directories but
+  /// never files.
   final bool dirOnly;
 
   bool matches(String rel, {required bool isDirectory}) =>

@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:yaml/yaml.dart';
 
 import '../manifest/yaml_text.dart';
+import '../unbundler/unbundler.dart';
 import '../unbundler/unpack_stamp.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
@@ -28,7 +30,7 @@ class CliException implements Exception {
 /// of printed, and a validation failure is a document too (`errors`), so a
 /// tool reading stdout always gets JSON and an exit code.
 abstract class MoldCommand extends Command<int> {
-  MoldCommand(this.out, this.err) {
+  MoldCommand(this.out, this.err, {this._input}) {
     argParser.addFlag(
       'json',
       negatable: false,
@@ -41,6 +43,25 @@ abstract class MoldCommand extends Command<int> {
 
   /// Everything meant for a person.
   final StringSink err;
+
+  /// What `-` reads in place of an archive file; stdin when not injected.
+  final Stream<List<int>>? _input;
+
+  /// Whether [source] names stdin rather than a file.
+  static bool isStdin(String source) => source == '-';
+
+  /// The archive bytes [source] names: the file at that path, or with `-`
+  /// everything on stdin, so `curl … | mold unpack - -t app` needs no
+  /// intermediate file.
+  Future<Uint8List> readArchiveSource(String source) async {
+    if (!isStdin(source)) {
+      return Unbundler.readArchive(source);
+    }
+    final builder = BytesBuilder(copy: false);
+    await (_input ?? stdin).forEach(builder.add);
+
+    return builder.takeBytes();
+  }
 
   final List<ValidationError> _warnings = [];
 

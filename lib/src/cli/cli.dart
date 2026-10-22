@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 
+import 'init_command.dart';
 import 'inspect_command.dart';
 import 'pack_command.dart';
 import 'unpack_command.dart';
@@ -15,25 +16,33 @@ const _description =
 /// Builds the `mold` command runner. [out] receives a command's product
 /// (`--json`), [err] everything meant for a person; both are injected so tests
 /// can capture them with a buffer.
-CommandRunner<int> buildRunner(StringSink out, StringSink err) =>
-    CommandRunner<int>('mold', _description)
-      ..addCommand(PackCommand(out, err))
-      ..addCommand(UnpackCommand(out, err))
-      ..addCommand(InspectCommand(out, err));
+///
+/// [input] is what an archive named `-` is read from; stdin when null.
+CommandRunner<int> buildRunner(
+  StringSink out,
+  StringSink err, {
+  Stream<List<int>>? input,
+}) => CommandRunner<int>('mold', _description)
+  ..addCommand(InitCommand(out, err))
+  ..addCommand(PackCommand(out, err))
+  ..addCommand(UnpackCommand(out, err, input: input))
+  ..addCommand(InspectCommand(out, err, input: input));
 
 /// Runs the `mold` CLI and returns its process exit code.
 ///
 /// `0` ok, `1` validation / IO / format failure (and a stale `pack --check`),
 /// `64` usage error. Pure of `exit()` so it can be driven from tests: pass
 /// buffers for [out] and [err] to capture output.
-Future<int> runBundleCli(
+Future<int> runMoldCli(
   List<String> args, {
   StringSink? out,
   StringSink? err,
+  Stream<List<int>>? input,
 }) async {
   final errSink = err ?? stderr;
   try {
-    return await buildRunner(out ?? stdout, errSink).run(args) ?? 0;
+    return await buildRunner(out ?? stdout, errSink, input: input).run(args) ??
+        0;
   } on UsageException catch (e) {
     errSink
       ..writeln(e.message)

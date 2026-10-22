@@ -12,6 +12,56 @@ VariablePrompter scriptedPrompter(List<String?> lines, StringSink out) {
 }
 
 void main() {
+  group('VariablePrompter', () {
+    const platform = TemplateVariable(
+      name: 'platform',
+      choices: ['android', 'ios'],
+    );
+
+    test('asks again for an answer validation would refuse', () {
+      final out = StringBuffer();
+      final value = scriptedPrompter([
+        'windows',
+        'ios',
+      ], out).promptFor(platform);
+
+      expect(value, 'ios');
+      expect(out.toString(), contains("value 'windows' is not one of"));
+    });
+
+    test('checks a replaces value is a name token', () {
+      const name = TemplateVariable(name: 'name', replaces: 'app');
+      final out = StringBuffer();
+      final value = scriptedPrompter([
+        'my app!',
+        'my_app',
+      ], out).promptFor(name);
+
+      expect(value, 'my_app');
+      expect(out.toString(), contains('not a valid name token'));
+    });
+
+    test('gives up after maxAttempts, leaving it to the validator', () {
+      var reads = 0;
+      final value = VariablePrompter(StringBuffer(), () {
+        reads++;
+        return 'windows';
+      }).promptFor(platform);
+
+      expect(value, 'windows');
+      expect(reads, VariablePrompter.maxAttempts);
+    });
+
+    test('end of input still ends the prompt', () {
+      final value = scriptedPrompter([
+        'windows',
+        null,
+      ], StringBuffer()).promptFor(platform);
+
+      expect(value, isNull);
+    });
+  });
+
   group('VariableResolver', () {
     const projectName = TemplateVariable(
       name: 'project_name',

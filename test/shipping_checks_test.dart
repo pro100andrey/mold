@@ -56,15 +56,27 @@ void main() {
     });
 
     test('a spelling no transform produces is named without a guess', () {
-      write('a.txt', 'app_template apptemplate');
+      write('a.txt', 'app_template app.template');
 
       final message = warnings(
         named('app_template'),
         MoldCode.projectUncoveredCasing,
       ).single.message;
 
-      expect(message, contains("No transform produces 'apptemplate'"));
-      expect(message, isNot(contains('from: "apptemplate"')));
+      expect(message, contains("No transform produces 'app.template'"));
+      expect(message, isNot(contains('from: "app.template"')));
+    });
+
+    test('a run-together spelling is flatCase', () {
+      write('android/build.gradle', 'applicationId "com.example.apptemplate"');
+
+      final message = warnings(
+        named('app_template'),
+        MoldCode.projectUncoveredCasing,
+      ).single.message;
+
+      expect(message, contains('from: "apptemplate"'));
+      expect(message, contains('to: "{{ name | flatCase }}"'));
     });
 
     test('derived casings and longer words are not variants', () {
@@ -267,6 +279,25 @@ extra_substitutions:
 
       expect(r.isValid, isTrue);
       expect(r.warnings.single.code, MoldCode.renameCaseCollision);
+    });
+  });
+
+  group('unpacking on Windows', () {
+    const renames = {'a/notes.txt': 'a/my:notes.txt', 'b/x.txt': 'b/CON.txt'};
+
+    test('refuses names Windows cannot create', () {
+      final r = const RenameValidator(windows: true).validate(renames);
+
+      expect(r.errors.map((e) => e.code), [
+        MoldCode.renameInvalidName,
+        MoldCode.renameInvalidName,
+      ]);
+      expect(r.errors.first.message, contains("contains ':'"));
+      expect(r.errors.last.message, contains('reserved device name'));
+    });
+
+    test('elsewhere they unpack', () {
+      expect(const RenameValidator().validate(renames).isValid, isTrue);
     });
   });
 

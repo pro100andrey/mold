@@ -124,6 +124,8 @@ void main() {
       expect(CaseTransform.pascalCase.apply('my_project'), 'MyProject');
       expect(CaseTransform.screamingCase.apply('my_project'), 'MY_PROJECT');
       expect(CaseTransform.titleCase.apply('my_project'), 'My Project');
+      expect(CaseTransform.flatCase.apply('my_project'), 'myproject');
+      expect(CaseTransform.flatCase.apply('HTTPServer'), 'httpserver');
       expect(CaseTransform.pathCase.apply('com.acme'), 'com/acme');
     });
 

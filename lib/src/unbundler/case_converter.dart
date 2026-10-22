@@ -49,6 +49,13 @@ class CaseConverter {
   /// `Title Case`
   String toTitle(String token) => splitWords(token).map(_capitalize).join(' ');
 
+  /// `flatcase`
+  ///
+  /// Not part of [replacements] either: for a single word it is the
+  /// snake_case form, and for several it reads as one word, so an automatic
+  /// rename would reach inside unrelated identifiers.
+  String toFlat(String token) => splitWords(token).join();
+
   /// `com.acme` → `com/acme`
   ///
   /// The one conversion here that is not a casing: a dotted package name
