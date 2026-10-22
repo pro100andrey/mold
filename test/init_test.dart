@@ -110,6 +110,37 @@ void main() {
       });
     }
 
+    test('a TOML name after an array value', () {
+      File(p.join(project.path, 'pubspec.yaml')).deleteSync();
+      write(
+        'Cargo.toml',
+        '[package]\nauthors = ["me"]\nname = "late_name"\n\n'
+            '[dependencies]\nname = "nope"\n',
+      );
+
+      expect(detectProjectName(project.path).name, 'late_name');
+    });
+
+    test('a TOML table without a name does not borrow the next one', () {
+      File(p.join(project.path, 'pubspec.yaml')).deleteSync();
+      write('Cargo.toml', '[package]\nversion = "1"\n[lib]\nname = "nope"\n');
+
+      expect(detectProjectName(project.path).source, 'directory name');
+    });
+
+    for (final line in [
+      'module "example.com/acme/quoted"',
+      'module `example.com/acme/quoted`',
+      'module example.com/acme/quoted // the service',
+    ]) {
+      test('reads go.mod: $line', () {
+        File(p.join(project.path, 'pubspec.yaml')).deleteSync();
+        write('go.mod', '$line\n');
+
+        expect(detectProjectName(project.path).name, 'quoted');
+      });
+    }
+
     test('poetry keeps its name under tool.poetry', () {
       File(p.join(project.path, 'pubspec.yaml')).deleteSync();
       write('pyproject.toml', '[tool.poetry]\nname = "poetry-app"\n');
@@ -185,6 +216,46 @@ void main() {
         expect(code, 0);
         expect(Manifest.fromYaml(manifest()).extraSubstitutions, isEmpty);
       }
+    });
+
+    test('a spelling only in paths goes to path_renames', () async {
+      write('ios/appTemplate/Info.plist', '<plist/>');
+
+      final (code, _, err) = await mold(['init', project.path], answers: ['']);
+
+      expect(code, 0, reason: err);
+      expect(err, contains('Add them to path_renames?'));
+      final m = Manifest.fromYaml(manifest());
+      expect(m.extraSubstitutions, isEmpty);
+      expect(m.pathRenames, [
+        const Substitution(
+          from: 'appTemplate',
+          to: '{{ project_name | camelCase }}',
+        ),
+      ]);
+    });
+
+    test('a spelling in both goes to both lists', () async {
+      write('ios/appTemplate/Info.plist', 'appTemplate');
+
+      await mold(['init', project.path, '--yes']);
+
+      final m = Manifest.fromYaml(manifest());
+      expect(m.extraSubstitutions.single.from, 'appTemplate');
+      expect(m.pathRenames.single.from, 'appTemplate');
+    });
+
+    test('--variable must be a placeholder name', () async {
+      final (code, _, err) = await mold([
+        'init',
+        project.path,
+        '--variable',
+        'project-name',
+      ]);
+
+      expect(code, 64);
+      expect(err, contains('cannot be a placeholder name'));
+      expect(File(p.join(project.path, 'mold.yaml')).existsSync(), isFalse);
     });
 
     test('--yes adds them without asking', () async {
@@ -263,6 +334,8 @@ void main() {
           'from': 'appTemplate',
           'to': '{{ project_name | camelCase }}',
           'files': ['a.txt'],
+          'inContent': true,
+          'inPaths': false,
         },
       ]);
     });

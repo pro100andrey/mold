@@ -44,13 +44,17 @@ class VariablePrompter {
     }
 
     final def = variable.defaultValue;
+    String? refused;
     for (var attempt = 1; ; attempt++) {
       _out.write('${variable.name}${def != null ? ' [$def]' : ''}: ');
 
       final line = _readLine();
       if (line == null) {
         _out.writeln(); // Close the dangling prompt line.
-        return def;
+        // Input ending after a refused answer keeps that answer, for the
+        // validator to refuse: falling back to the default would scaffold
+        // a value nobody gave, and exit 0.
+        return refused ?? def;
       }
 
       final trimmed = line.trim();
@@ -62,6 +66,7 @@ class VariablePrompter {
       if (issue == null || attempt == maxAttempts) {
         return value;
       }
+      refused = value;
       _out.writeln(issue.message);
     }
   }

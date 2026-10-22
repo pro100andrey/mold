@@ -55,13 +55,17 @@ class VariablesValidator extends ValidatorBase<VariablesInput> {
   static const valuePresent = 'VARIABLE_VALUE_PRESENT';
 
   /// A value used for a `replaces` token must be a name the casings can be
-  /// derived from: ASCII letters, digits, space, underscore and hyphen, with
-  /// at least one letter.
+  /// derived from: ASCII letters, digits, space, underscore and hyphen,
+  /// starting with a letter or digit and holding at least one letter. A
+  /// leading separator would be dropped by the casings but written as is by
+  /// a plain `{{ name }}`.
   ///
   /// A leading digit is allowed — `3d-viewer` is a fine npm package, Go
   /// module or directory, if not a Dart one. A language that forbids it says
   /// so with the variable's `pattern`.
-  static final _nameFormat = RegExp(r'^(?=.*[A-Za-z])[A-Za-z0-9 _-]+$');
+  static final _nameFormat = RegExp(
+    r'^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9 _-]*$',
+  );
 
   @override
   String get phase => 'variables';

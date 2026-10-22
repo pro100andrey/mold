@@ -176,6 +176,9 @@ class SubstitutionTemplate {
     return buffer.toString();
   }
 
+  /// Whether [name] can be written as a placeholder, `{{ name }}`.
+  static bool isVariableName(String name) => _name.hasMatch(name);
+
   static final _name = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
 
   static TemplateSegment? _parseBody(

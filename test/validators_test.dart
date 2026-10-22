@@ -381,6 +381,8 @@ variables:
         expect(check('3d_viewer').isValid, isTrue);
         expect(check('2fast').isValid, isTrue);
         expect(check('123'), rejectsWith(VariablesValidator.invalidFormat));
+        expect(check('-app'), rejectsWith(VariablesValidator.invalidFormat));
+        expect(check('_ my'), rejectsWith(VariablesValidator.invalidFormat));
       });
     });
   });

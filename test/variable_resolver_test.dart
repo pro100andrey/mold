@@ -52,13 +52,26 @@ void main() {
       expect(reads, VariablePrompter.maxAttempts);
     });
 
-    test('end of input still ends the prompt', () {
+    test('end of input after a refused answer keeps that answer', () {
+      // Not the default: that would scaffold a value nobody gave, exit 0.
+      const withDefault = TemplateVariable(
+        name: 'platform',
+        choices: ['android', 'ios'],
+        defaultValue: 'android',
+      );
       final value = scriptedPrompter([
         'windows',
         null,
-      ], StringBuffer()).promptFor(platform);
+      ], StringBuffer()).promptFor(withDefault);
 
-      expect(value, isNull);
+      expect(value, 'windows');
+    });
+
+    test('end of input before any answer is no answer', () {
+      expect(
+        scriptedPrompter([null], StringBuffer()).promptFor(platform),
+        isNull,
+      );
     });
   });
 

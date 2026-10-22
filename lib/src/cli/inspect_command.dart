@@ -64,7 +64,7 @@ class InspectCommand extends MoldCommand {
     final m = info.manifest;
     err.writeln(
       '${m.name} ${m.version} — ${info.sizes.length} files, '
-      '${_size(info.totalBytes)}, ${info.executable.length} executable.',
+      '${formatSize(info.totalBytes)}, ${info.executable.length} executable.',
     );
 
     if (m.variables.isNotEmpty) {
@@ -108,7 +108,7 @@ class InspectCommand extends MoldCommand {
       err.writeln('\nFiles:');
       for (final MapEntry(key: path, value: size) in info.sizes.entries) {
         final mark = info.executable.contains(path) ? '  (executable)' : '';
-        err.writeln('  $path  ${_size(size)}$mark');
+        err.writeln('  $path  ${formatSize(size)}$mark');
       }
     }
   }
@@ -154,14 +154,16 @@ class InspectCommand extends MoldCommand {
 
 /// [bytes] for a person: exact below a kilobyte, otherwise in decimal units
 /// to one place — `48.3 MB`, the scale the size is read at.
-String _size(int bytes) {
+String formatSize(int bytes) {
   if (bytes < 1000) {
     return '$bytes bytes';
   }
   const units = ['kB', 'MB', 'GB'];
   var value = bytes / 1000;
   var unit = 0;
-  while (value >= 1000 && unit < units.length - 1) {
+  // Compared as it will print: 999.96 kB is shown as 1.0 MB, not 1000.0 kB.
+  while (double.parse(value.toStringAsFixed(1)) >= 1000 &&
+      unit < units.length - 1) {
     value /= 1000;
     unit++;
   }

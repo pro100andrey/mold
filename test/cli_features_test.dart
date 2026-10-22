@@ -417,6 +417,14 @@ no_substitute: [notes.txt]
       expect(err, contains('lib/super_server.dart  16 bytes'));
     });
 
+    test('a size rounding up to the next unit is shown in it', () {
+      expect(formatSize(999), '999 bytes');
+      expect(formatSize(1000), '1.0 kB');
+      expect(formatSize(999949), '999.9 kB');
+      expect(formatSize(999960), '1.0 MB');
+      expect(formatSize(999960000), '1.0 GB');
+    });
+
     test('--manifest prints the embedded mold.yaml on stdout', () async {
       final (code, out, err) = await mold(['inspect', archive, '--manifest']);
 

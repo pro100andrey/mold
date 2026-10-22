@@ -31,8 +31,8 @@ class _TokenStats {
   final List<String> verbatimFiles = [];
 
   /// Spellings of the token no derived casing matches (`appTemplate`,
-  /// `App Template`) → the files holding them, once per occurrence.
-  final Map<String, List<String>> uncovered = {};
+  /// `App Template`) → where they occur.
+  final Map<String, _Occurrences> uncovered = {};
 
   /// Total occurrences of any derived casing.
   int get matches => _matches;
@@ -62,6 +62,15 @@ class _TokenStats {
   }
 }
 
+/// Where an uncovered spelling occurs: the files holding it, once per
+/// occurrence, and whether in their content, their paths, or both — which
+/// decides whether it needs `extra_substitutions`, `path_renames`, or both.
+class _Occurrences {
+  final List<String> files = [];
+  var inContent = false;
+  var inPaths = false;
+}
+
 /// A spelling of a variable's token that no derived casing covers, but
 /// [transform] reproduces — so the `extra_substitutions` entry [suggestion]
 /// renames it the way the template meant.
@@ -71,6 +80,8 @@ class UncoveredSpelling {
     required this.spelling,
     required this.transform,
     required this.files,
+    this.inContent = true,
+    this.inPaths = false,
   });
 
   /// The variable whose token it spells.
@@ -84,6 +95,14 @@ class UncoveredSpelling {
 
   /// The files — or paths — it occurs in.
   final List<String> files;
+
+  /// Whether it occurs in file content: [suggestion] belongs in
+  /// `extra_substitutions`.
+  final bool inContent;
+
+  /// Whether it occurs in a path: [suggestion] belongs in `path_renames`,
+  /// which is all that renames paths.
+  final bool inPaths;
 
   /// The entry that renames it.
   Substitution get suggestion =>
@@ -273,22 +292,9 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
       }
 
       if (s.uncovered.isNotEmpty) {
-        issues.add(_uncoveredWarning(name, token, s.uncovered));
-        if (onSuggestion case final sink?) {
-          for (final MapEntry(key: spelling, value: files)
-              in s.uncovered.entries) {
-            if (_transformFor(token, spelling) case final transform?) {
-              sink(
-                UncoveredSpelling(
-                  variable: name,
-                  spelling: spelling,
-                  transform: transform,
-                  files: files.toSet().toList(),
-                ),
-              );
-            }
-          }
-        }
+        final (warning, fixable) = _uncovered(name, token, s.uncovered);
+        issues.add(warning);
+        fixable.forEach(onSuggestion ?? (_) {});
       }
 
       if (s.matches == 0) {
@@ -357,48 +363,73 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
   }
 
   /// The warning for spellings of [token] substitution will not reach, with
-  /// the `extra_substitutions` entries that would.
+  /// the entries that would — and those entries as data, for
+  /// [onSuggestion].
   ///
   /// An entry is suggested only where a transform reproduces the spelling
   /// exactly from the token, so pasting it renames that site the way the
   /// template meant; a spelling no transform produces (`app.template`) is
-  /// named without a guess.
-  static ValidationError _uncoveredWarning(
+  /// named without a guess. A spelling in content goes under
+  /// `extra_substitutions`, one in a path under `path_renames`: each list
+  /// reaches only its own.
+  static (ValidationError, List<UncoveredSpelling>) _uncovered(
     String name,
     String token,
-    Map<String, List<String>> uncovered,
+    Map<String, _Occurrences> uncovered,
   ) {
     final spellings = uncovered.entries.toList()
-      ..sort((a, b) => b.value.length.compareTo(a.value.length));
+      ..sort((a, b) => b.value.files.length.compareTo(a.value.files.length));
     final listed = [
-      for (final MapEntry(key: spelling, value: files) in spellings)
-        "'$spelling' (${files.length}: ${sample(files.toSet())})",
+      for (final MapEntry(key: spelling, value: where) in spellings)
+        "'$spelling' (${where.files.length}: ${sample(where.files.toSet())})",
     ].join(', ');
 
-    final entries = <String>[];
+    final fixable = <UncoveredSpelling>[];
     final unmatched = <String>[];
-    for (final MapEntry(key: spelling) in spellings) {
-      final transform = _transformFor(token, spelling);
-      if (transform == null) {
-        unmatched.add("'$spelling'");
-      } else {
-        entries.add(
-          '  - from: "$spelling"\n'
-          '    to: "{{ $name | ${transform.name} }}"',
+    for (final MapEntry(key: spelling, value: where) in spellings) {
+      if (_transformFor(token, spelling) case final transform?) {
+        fixable.add(
+          UncoveredSpelling(
+            variable: name,
+            spelling: spelling,
+            transform: transform,
+            files: where.files.toSet().toList(),
+            inContent: where.inContent,
+            inPaths: where.inPaths,
+          ),
         );
+      } else {
+        unmatched.add("'$spelling'");
       }
     }
 
-    return ValidationError.warning(
+    String entries(bool Function(UncoveredSpelling) where) => fixable
+        .where(where)
+        .map(
+          (s) =>
+              '  - from: "${s.suggestion.from}"\n'
+              '    to: "${s.suggestion.to}"',
+        )
+        .join('\n');
+    final content = entries((s) => s.inContent);
+    final paths = entries((s) => s.inPaths);
+    final advice = [
+      if (content.isNotEmpty) 'extra_substitutions:\n$content',
+      if (paths.isNotEmpty) 'path_renames:\n$paths',
+    ];
+
+    final warning = ValidationError.warning(
       uncoveredCasing,
       "Variable '$name': $listed spell token '$token' in a way no derived "
       'casing matches, so unpacking leaves them as they are.'
-      '${entries.isEmpty ? '' : ' To rename them too, add to '
-                'extra_substitutions:\n${entries.join('\n')}'}'
+      '${advice.isEmpty ? '' : ' To rename them too, add to '
+                '${advice.join('\nand to ')}'}'
       '${unmatched.isEmpty ? '' : '\nNo transform produces '
                 '${unmatched.join(', ')}; give each a literal entry.'}',
       field: name,
     );
+
+    return (warning, fixable);
   }
 
   /// The transform that spells [token] as [spelling] exactly, if any.
@@ -602,7 +633,12 @@ class _Variants {
 
   /// Records the variants in [hay] — the file [rel], or its path — outside
   /// the [claimed] spans.
-  void scan(String hay, String rel, List<int> claimed) {
+  void scan(
+    String hay,
+    String rel,
+    List<int> claimed, {
+    required bool inPath,
+  }) {
     final pattern = _pattern;
     if (pattern == null) {
       return;
@@ -616,7 +652,13 @@ class _Variants {
       }
       final s = _byKey[text.toLowerCase().replaceAll(_separators, '')];
       if (s != null) {
-        (s.uncovered[text] ??= []).add(rel);
+        final where = s.uncovered[text] ??= _Occurrences();
+        where.files.add(rel);
+        if (inPath) {
+          where.inPaths = true;
+        } else {
+          where.inContent = true;
+        }
       }
     }
   }
@@ -757,13 +799,13 @@ class _Search {
   /// Counts the matches in the packed path [rel].
   void paths(String rel) {
     final claimed = _tally(rel, _pathPattern, _pathSites);
-    _variants.scan(rel, rel, claimed);
+    _variants.scan(rel, rel, claimed, inPath: true);
   }
 
   /// Counts the matches in the substituted text [text].
   void content(String rel, String text) {
     final claimed = _tally(text, _contentPattern, _contentSites);
-    _variants.scan(text, rel, claimed);
+    _variants.scan(text, rel, claimed, inPath: false);
   }
 
   /// Notes which tokens the verbatim file [rel] holds.

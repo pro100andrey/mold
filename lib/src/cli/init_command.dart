@@ -7,6 +7,7 @@ import 'package:yaml/yaml.dart';
 
 import '../bundler/project_validator.dart';
 import '../manifest/manifest.dart';
+import '../manifest/substitution_template.dart';
 import '../manifest/yaml_text.dart';
 import '../prompt/variable_prompter.dart';
 import '../unbundler/case_converter.dart';
@@ -83,6 +84,14 @@ class InitCommand extends MoldCommand {
     }
 
     final variable = results['variable'] as String;
+    // Checked here, not left to pack: a suggestion writes it into a
+    // placeholder, and pack would refuse the manifest init reported written.
+    if (!SubstitutionTemplate.isVariableName(variable)) {
+      throw CliException(
+        "--variable '$variable' cannot be a placeholder name: letters, "
+        'digits and underscores, not starting with a digit.',
+      );
+    }
     final ({String name, String source}) detected;
     if (results['token'] case final String token) {
       detected = (name: token, source: '--token');
@@ -118,9 +127,7 @@ class InitCommand extends MoldCommand {
 
     final add = suggested.isNotEmpty && _accept(results, suggested);
     final manifest = add
-        ? _manifest(detected.name, variable, [
-            for (final s in suggested) s.suggestion,
-          ])
+        ? _manifest(detected.name, variable, suggested)
         : draft;
     final yaml = manifest.toYaml();
 
@@ -140,6 +147,8 @@ class InitCommand extends MoldCommand {
               'from': s.suggestion.from,
               'to': s.suggestion.to,
               'files': s.files,
+              'inContent': s.inContent,
+              'inPaths': s.inPaths,
             },
         ],
         'suggestionsAdded': add,
@@ -176,7 +185,11 @@ class InitCommand extends MoldCommand {
         '(${s.files.length} ${s.files.length == 1 ? 'file' : 'files'})',
       );
     }
-    err.write('Add them to extra_substitutions? [Y/n] ');
+    final lists = [
+      if (suggested.any((s) => s.inContent)) 'extra_substitutions',
+      if (suggested.any((s) => s.inPaths)) 'path_renames',
+    ];
+    err.write('Add them to ${lists.join(' and ')}? [Y/n] ');
     final answer = _readLine();
     if (answer == null) {
       err.writeln();
@@ -186,10 +199,12 @@ class InitCommand extends MoldCommand {
     return const ['', 'y', 'yes'].contains(answer.trim().toLowerCase());
   }
 
+  /// The draft manifest, with each of [suggested] where it renames: content
+  /// spellings in `extra_substitutions`, path spellings in `path_renames`.
   static Manifest _manifest(
     String token,
     String variable,
-    List<Substitution> extra,
+    List<UncoveredSpelling> suggested,
   ) => Manifest(
     name: token,
     version: '0.1.0',
@@ -203,7 +218,14 @@ class InitCommand extends MoldCommand {
         replaces: token,
       ),
     ],
-    extraSubstitutions: extra,
+    extraSubstitutions: [
+      for (final s in suggested)
+        if (s.inContent) s.suggestion,
+    ],
+    pathRenames: [
+      for (final s in suggested)
+        if (s.inPaths) s.suggestion,
+    ],
   );
 }
 
@@ -268,14 +290,16 @@ final List<(String, String? Function(String))> _manifests = [
     'go.mod',
     (text) {
       final module = RegExp(
-        r'^module\s+(\S+)',
+        // A path may be quoted, with "…" or `…`; a comment may follow.
+        r'^module\s+(?:"([^"]+)"|`([^`]+)`|([^\s"`]+))',
         multiLine: true,
       ).firstMatch(text);
       if (module == null) {
         return null;
       }
       // `example.com/acme/tool/v2`: the major-version suffix is not a name.
-      final segments = module[1]!.split('/');
+      final path = module[1] ?? module[2] ?? module[3]!;
+      final segments = path.split('/');
       return segments.length > 1 && RegExp(r'^v\d+$').hasMatch(segments.last)
           ? segments[segments.length - 2]
           : segments.last;
@@ -312,9 +336,12 @@ String? _jsonName(String text) => switch (jsonDecode(text)) {
 /// A quoted string, single or double, captured without its quotes.
 const _quoted = '''["']([^"']+)["']''';
 
-/// `name = "…"` in the TOML table [table], before the next table opens.
+/// `name = "…"` in the TOML table [table], before the next table opens — a
+/// line starting with `[`, not any `[`: an array value (`authors = ["me"]`)
+/// may come first.
 String? _tomlName(String text, String table) => RegExp(
-  '^\\[${RegExp.escape(table)}\\][^\\[]*?^\\s*name\\s*=\\s*$_quoted',
+  '^\\[${RegExp.escape(table)}\\](?:(?!^\\[)[\\s\\S])*?'
+  '^\\s*name\\s*=\\s*$_quoted',
   multiLine: true,
 ).firstMatch(text)?[1];
 

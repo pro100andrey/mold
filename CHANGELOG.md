@@ -110,8 +110,8 @@ whole-file diff.
 - `PROJECT_UNCOVERED_CASING` ⚠: spellings of a token no derived casing
   matches — on a fresh Flutter project, the camelCase iOS/macOS bundle id
   `com.example.appTemplate` and the Title Case display name, which a rename
-  silently missed. The warning carries the `extra_substitutions` entries
-  that fix it.
+  silently missed. The warning carries the entries that fix it — under
+  `extra_substitutions` for content, `path_renames` for paths.
 - `MANIFEST_UNKNOWN_KEY` ⚠: a key the format does not define, with the key it
   probably means. Unknown keys used to be ignored silently.
 - `VARIABLE_VALUE_PRESENT` ⚠: the value already occurs in the template, so
@@ -244,9 +244,10 @@ about 130 ms more on the corpus above.
   (`TemplateInfo.manifestYaml`).
 - **`mold init [dir]`** writes a starting `mold.yaml`: the project's name —
   from its package manifest (Dart, Node, PHP, Rust, Go, Python, Gradle,
-  Maven, Swift, .NET) or the directory — as one variable's token, the manifest excluded. It runs the
-  pack's checks on the draft and offers the `extra_substitutions` entries
-  `PROJECT_UNCOVERED_CASING` would suggest (`--yes` adds them unasked);
+  Maven, Swift, .NET) or the directory — as one variable's token, the
+  manifest excluded. It runs the pack's checks on the draft and offers the
+  entries `PROJECT_UNCOVERED_CASING` would suggest, in `extra_substitutions`
+  or `path_renames` as each spelling needs (`--yes` adds them unasked);
   `ProjectValidator.onSuggestion` hands them over as data.
 - **`message:`** in the manifest — next steps, rendered with the values
   like a substitution's `to:` and validated like one — printed after

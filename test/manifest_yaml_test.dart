@@ -99,6 +99,21 @@ void main() {
       expect(parsed.extraSubstitutions.single.to, 'e\x85f\x9fg');
     });
 
+    test('a message that is not text is MANIFEST_INVALID', () {
+      for (final value in ['[Run make, Then test]', '{a: b}']) {
+        expect(
+          () => Manifest.fromYaml('name: x\nversion: 1\nmessage: $value\n'),
+          throwsA(
+            isA<ValidationException>().having(
+              (e) => e.codes,
+              'codes',
+              [MoldCode.manifestInvalid],
+            ),
+          ),
+        );
+      }
+    });
+
     test('omits empty sections', () {
       const minimal = Manifest(name: 'x', version: '1');
       final yaml = minimal.toYaml();

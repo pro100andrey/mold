@@ -204,7 +204,7 @@ class Manifest {
       noSubstitute: _stringList(doc.nodes['no_substitute']),
       binaryExtensions: _stringList(doc.nodes['binary_extensions']),
       useGitignore: _bool(doc['use_gitignore'], 'use_gitignore', true),
-      message: textAt(doc, 'message'),
+      message: _text(doc, 'message'),
       source: text,
       path: path,
       unknownKeys: unknown,
@@ -612,6 +612,17 @@ class Manifest {
   static final _nonPrintable = RegExp(
     r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F]',
   );
+
+  /// Reads an optional text field: a scalar, as written. A list or a mapping
+  /// is refused rather than printed as its `toString`.
+  static String? _text(YamlMap doc, String key) {
+    final node = doc.nodes[key];
+    if (node != null && node is! YamlScalar) {
+      throw FormatException("'$key' must be text, but got: ${node.value}.");
+    }
+
+    return textAt(doc, key);
+  }
 
   /// Reads an optional boolean field, falling back to [fallback] when absent.
   ///

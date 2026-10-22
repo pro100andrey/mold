@@ -25,6 +25,7 @@ export 'package:mold/src/cli/cli.dart'
     show CliException, buildRunner, runMoldCli;
 export 'package:mold/src/cli/init_command.dart'
     show InitCommand, detectProjectName;
+export 'package:mold/src/cli/inspect_command.dart' show formatSize;
 export 'package:mold/src/manifest/content_policy.dart' show ContentPolicy;
 export 'package:mold/src/manifest/manifest.dart'
     show Manifest, Substitution, TemplateVariable;

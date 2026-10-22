@@ -162,8 +162,9 @@ package manifest — `pubspec.yaml`, `package.json`, `composer.json`,
 `--token` names it instead.
 
 It then runs the pack's checks on that draft. Spellings of the name the four
-derived casings miss are offered as `extra_substitutions` entries — on a fresh
-Flutter project, the bundle id and the display name:
+derived casings miss are offered as entries — `extra_substitutions` for those
+in file content, `path_renames` for those in paths, both when they are in
+both. On a fresh Flutter project, the bundle id and the display name:
 
 ```text
 Spellings of the name no derived casing covers:
@@ -425,8 +426,9 @@ indistinguishable from snake_case, so deriving it would be ambiguous — reach i
 with an explicit transform instead (below).
 
 The value given for a `replaces` variable must be something the casings can be
-derived from: ASCII letters, digits, spaces, `_` and `-`, with at least one
-letter — `3d-viewer` is fine, `123` and `my/app` are `VARIABLE_INVALID_FORMAT`.
+derived from: ASCII letters, digits, spaces, `_` and `-`, starting with a
+letter or digit and holding at least one letter — `3d-viewer` is fine; `123`,
+`-app` and `my/app` are `VARIABLE_INVALID_FORMAT`.
 Anything a particular language forbids on top of that, such as a leading digit
 in a Dart package name, belongs in the variable's `pattern`.
 
@@ -635,8 +637,10 @@ from the collateral.
 The four casings are not every way a name gets written, and the check says
 so. A token's words matched case-insensitively, joined by one of ` ._-` or by
 nothing, that land on no derived casing are reported as
-`PROJECT_UNCOVERED_CASING` — with the `extra_substitutions` entries that would
-rename them, wherever a transform reproduces the spelling exactly. On a fresh
+`PROJECT_UNCOVERED_CASING` — with the entries that would rename them,
+wherever a transform reproduces the spelling exactly: under
+`extra_substitutions` for a spelling in content, under `path_renames` for one
+in a path. On a fresh
 `flutter create` project named `app_template`:
 
 ```text
