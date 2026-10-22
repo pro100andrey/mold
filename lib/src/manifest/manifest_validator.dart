@@ -17,6 +17,8 @@ import 'substitution_template.dart';
 class ManifestValidator extends ValidatorBase<Manifest> {
   const ManifestValidator();
 
+  static const invalid = 'MANIFEST_INVALID';
+  static const notFound = 'MANIFEST_NOT_FOUND';
   static const missingName = 'MANIFEST_MISSING_NAME';
   static const missingVersion = 'MANIFEST_MISSING_VERSION';
   static const duplicateVariable = 'MANIFEST_DUPLICATE_VARIABLE';
@@ -29,13 +31,26 @@ class ManifestValidator extends ValidatorBase<Manifest> {
   static const unknownVariable = 'MANIFEST_UNKNOWN_VARIABLE';
   static const unusedVariable = 'MANIFEST_UNUSED_VARIABLE';
   static const duplicateSubstitution = 'MANIFEST_DUPLICATE_SUBSTITUTION';
+  static const conflictingTokens = 'MANIFEST_CONFLICTING_TOKENS';
+  static const invalidPattern = 'MANIFEST_INVALID_PATTERN';
+  static const invalidDefault = 'MANIFEST_INVALID_DEFAULT';
+  static const unknownKey = 'MANIFEST_UNKNOWN_KEY';
 
   @override
   String get phase => 'manifest';
 
   @override
   ValidationResult validate(Manifest input) {
-    final issues = <ValidationError>[];
+    final issues = <ValidationError>[
+      for (final MapEntry(key: path, value: guess) in input.unknownKeys.entries)
+        ValidationError.warning(
+          unknownKey,
+          "Unknown manifest key '$path'"
+          "${guess == null ? '.' : " — did you mean '$guess'?"}"
+          ' It is ignored.',
+          field: path,
+        ),
+    ];
 
     if (input.name.isEmpty) {
       issues.add(
@@ -91,7 +106,11 @@ class ManifestValidator extends ValidatorBase<Manifest> {
           ),
         );
       }
+
+      issues.addAll(_checkConstraints(variable));
     }
+
+    issues.addAll(_conflictingTokens(input.variables));
 
     for (final pattern in input.globPatterns) {
       try {
@@ -107,6 +126,88 @@ class ManifestValidator extends ValidatorBase<Manifest> {
       ..addAll(_checkTemplates(input, seen));
 
     return ValidationResult(issues);
+  }
+
+  /// A `pattern` that does not compile, and a `default` its own constraints
+  /// reject — a default the user could never have typed.
+  static List<ValidationError> _checkConstraints(TemplateVariable variable) {
+    final pattern = variable.pattern;
+    if (pattern != null) {
+      try {
+        RegExp(pattern);
+      } on FormatException catch (e) {
+        return [
+          ValidationError(
+            invalidPattern,
+            "Variable '${variable.name}': pattern '$pattern' is not a valid "
+            'regular expression: ${e.message}',
+            field: variable.name,
+          ),
+        ];
+      }
+    }
+
+    final defaultValue = variable.defaultValue;
+    if (defaultValue != null && !variable.accepts(defaultValue)) {
+      return [
+        ValidationError(
+          invalidDefault,
+          "Variable '${variable.name}': default '$defaultValue' is not "
+          'allowed by its own ${_describeConstraints(variable)}.',
+          field: variable.name,
+        ),
+      ];
+    }
+
+    return const [];
+  }
+
+  /// `pattern '…'`, `choices […]`, or both — for a message.
+  static String _describeConstraints(TemplateVariable variable) => [
+    if (variable.pattern case final p?) "pattern '$p'",
+    if (variable.choices.isNotEmpty) 'choices (${variable.choices.join(', ')})',
+  ].join(' and ');
+
+  /// Pairs of variables whose `replaces` tokens derive a casing in common.
+  ///
+  /// The replacement table is keyed by casing, so a shared one belongs to the
+  /// later variable and the earlier one silently loses those sites —
+  /// `my_app` and `my-app` derive the very same four. Containment is not
+  /// reported: `app` inside `my_app` resolves by longest match, which is
+  /// well-defined.
+  static List<ValidationError> _conflictingTokens(
+    List<TemplateVariable> variables,
+  ) {
+    const converter = CaseConverter();
+    final claimed = <String, TemplateVariable>{};
+    final issues = <ValidationError>[];
+    for (final variable in variables) {
+      final replaces = variable.replaces;
+      if (replaces == null || replaces.isEmpty) {
+        continue;
+      }
+      final shared = <String, List<String>>{};
+      for (final casing in converter.replacements(replaces, replaces).keys) {
+        final earlier = claimed[casing];
+        if (earlier != null && earlier.name != variable.name) {
+          (shared[earlier.name] ??= []).add(casing);
+        }
+        claimed[casing] = variable;
+      }
+      for (final MapEntry(key: earlier, value: casings) in shared.entries) {
+        issues.add(
+          ValidationError.warning(
+            conflictingTokens,
+            "Variables '$earlier' and '${variable.name}' both derive "
+            '${casings.join(', ')}; those sites take the value of '
+            "'${variable.name}', the later one.",
+            field: variable.name,
+          ),
+        );
+      }
+    }
+
+    return issues;
   }
 
   /// Entries within one section that share a `from`.
@@ -150,9 +251,16 @@ class ManifestValidator extends ValidatorBase<Manifest> {
     final issues = <ValidationError>[];
     final referenced = <String>{};
 
-    for (final substitution in input.replacementTemplates) {
-      final from = substitution.from;
-      final template = SubstitutionTemplate.parse(substitution.to);
+    // The message renders like a `to:`, so it is checked like one — and a
+    // variable it names is used.
+    final templates = [
+      for (final s in input.replacementTemplates)
+        (field: s.from, text: s.to, what: "Substitution '${s.from}'"),
+      if (input.message case final text?)
+        (field: 'message', text: text, what: 'The message'),
+    ];
+    for (final (:field, :text, :what) in templates) {
+      final template = SubstitutionTemplate.parse(text);
       for (final error in template.errors) {
         issues.add(
           ValidationError(
@@ -162,7 +270,7 @@ class ManifestValidator extends ValidatorBase<Manifest> {
               .unknownTransform => unknownTransform,
             },
             error.message,
-            field: from,
+            field: field,
           ),
         );
       }
@@ -172,9 +280,9 @@ class ManifestValidator extends ValidatorBase<Manifest> {
           issues.add(
             ValidationError(
               unknownVariable,
-              "Substitution '$from' references '{{ $name }}', which is not a "
-              'declared variable.',
-              field: from,
+              "$what references '{{ $name }}', which is not a declared "
+              'variable.',
+              field: field,
             ),
           );
         }
@@ -187,7 +295,8 @@ class ManifestValidator extends ValidatorBase<Manifest> {
           .warning(
             unusedVariable,
             "Variable '${variable.name}' has no 'replaces' and is not "
-            'referenced by any substitution, so it does nothing.',
+            'referenced by any substitution or the message, so it does '
+            'nothing.',
             field: variable.name,
           ),
         );

@@ -1,9 +1,11 @@
+import '../archive/archive_path.dart';
+import '../bundler/shipping_checks.dart';
 import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
 
 /// Validates the planned path renames (unpack phase): no two archive entries
-/// may land on the same path.
+/// may land on the same path, or one inside the other.
 ///
 /// Substitution rewrites paths, and nothing stops two distinct entries from
 /// being rewritten to one destination — a `path_renames` pair pointing at the
@@ -17,16 +19,63 @@ import '../validation/validator_base.dart';
 /// last. A template that cannot round-trip its own files must not be unpacked
 /// at all.
 class RenameValidator extends ValidatorBase<Map<String, String>> {
-  const RenameValidator();
+  const RenameValidator({this.windows = false});
+
+  /// Whether the destinations must be names Windows can create.
+  ///
+  /// Pack only warns about such names (`PROJECT_PATH_NOT_PORTABLE`): the
+  /// template is fine wherever it can be unpacked. Unpacking one on Windows
+  /// is where it fails — `a:b` opens an alternate data stream of `a`, `CON`
+  /// the console — so there it is refused before anything is written.
+  final bool windows;
 
   static const collision = 'RENAME_COLLISION';
+  static const unsafePath = 'RENAME_UNSAFE_PATH';
+  static const caseCollision = 'RENAME_CASE_COLLISION';
+  static const invalidName = 'RENAME_INVALID_NAME';
 
   @override
   String get phase => 'rename';
 
   /// Validates the `from` → `to` mapping of every archive entry.
+  ///
+  /// Also checks each destination stays inside the target. `ArchiveValidator`
+  /// checks the paths the archive holds; substitution then rewrites them, and
+  /// a `path_renames` value — rendered from a variable at unpack — can turn a
+  /// contained path into `../x`. Checked here, after substitution, so no
+  /// rename can write outside the target directory.
   @override
   ValidationResult validate(Map<String, String> input) {
+    final unsafe = [
+      for (final MapEntry(key: from, value: to) in input.entries)
+        if (!isContainedArchivePath(to))
+          ValidationError(
+            unsafePath,
+            "Archive entry 'files/$from' is renamed to '$to', which is not a "
+            'contained relative path (traversal, absolute, or '
+            'drive-qualified).',
+            field: from,
+          ),
+    ];
+    if (unsafe.isNotEmpty) {
+      return ValidationResult(unsafe);
+    }
+    if (windows) {
+      final invalid = [
+        for (final MapEntry(key: from, value: to) in input.entries)
+          if (windowsProblem(to) case final problem?)
+            ValidationError(
+              invalidName,
+              "Archive entry 'files/$from' cannot be written to '$to' on "
+              'Windows: $problem.',
+              field: from,
+            ),
+      ];
+      if (invalid.isNotEmpty) {
+        return ValidationResult(invalid);
+      }
+    }
+
     // Two passes so the common case — every destination distinct — allocates
     // one Set rather than a growable List per file. Only destinations that
     // actually collide get a list built for them.
@@ -37,8 +86,37 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
         collided.add(to);
       }
     }
+    // Destinations equal but for case are one file on macOS and Windows.
+    // A warning, not an error: on a case-sensitive filesystem both survive,
+    // and pack already warned if the template itself held such a pair —
+    // this catches the ones renaming creates.
+    final caseIssues = [
+      for (final group in caseCollisions(input.values.toSet()))
+        if (!group.any(collided.contains))
+          ValidationError.warning(
+            caseCollision,
+            '${group.join(', ')} differ only in case after renaming; on a '
+            'case-insensitive filesystem only the last survives.',
+            field: group.first,
+          ),
+    ];
+    // A file landing where another needs a directory: `lib/app` and
+    // `lib/app/x.dart`, as a `path_renames` of `app_dir` → `app` makes them.
+    // Only one of the two can be created; without this the unpack found out
+    // halfway through writing.
+    final nested = [
+      for (final MapEntry(key: from, value: to) in input.entries)
+        if (_fileAbove(to, seen) case final file?)
+          ValidationError(
+            collision,
+            "Archive entry 'files/$from' would be written to '$to', inside "
+            "'$file' — which is a file of the template too. Give one of them "
+            'another name, or use path_renames to pin it.',
+            field: to,
+          ),
+    ];
     if (collided.isEmpty) {
-      return .ok();
+      return ValidationResult([...caseIssues, ...nested]);
     }
 
     // Insertion-ordered, so the message lists the sources in archive order and
@@ -51,6 +129,8 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
     });
 
     return ValidationResult([
+      ...caseIssues,
+      ...nested,
       for (final entry in sources.entries)
         ValidationError(
           collision,
@@ -61,5 +141,17 @@ class RenameValidator extends ValidatorBase<Map<String, String>> {
           field: entry.key,
         ),
     ]);
+  }
+
+  /// The first ancestor of [path] that is itself in [destinations], if any.
+  static String? _fileAbove(String path, Set<String> destinations) {
+    for (var i = path.indexOf('/'); i != -1; i = path.indexOf('/', i + 1)) {
+      final ancestor = path.substring(0, i);
+      if (destinations.contains(ancestor)) {
+        return ancestor;
+      }
+    }
+
+    return null;
   }
 }

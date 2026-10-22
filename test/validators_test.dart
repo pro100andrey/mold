@@ -1,9 +1,10 @@
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Matches a result carrying an error-severity issue with the given code.
 Matcher rejectsWith(String code) => predicate<ValidationResult>(
@@ -121,6 +122,23 @@ extra_substitutions:
           validator.validate(m),
           rejectsWith(ManifestValidator.unknownVariable),
         );
+      });
+
+      test('the message is checked like a substitution', () {
+        final m = Manifest.fromYaml('''
+name: x
+version: 1
+variables:
+  shown: {}
+message: "cd {{ shown | snakeCase }} {{ missing }} {{ shown | nope }}"
+''');
+        final r = validator.validate(m);
+        final codes = [...r.errors, ...r.warnings].map((e) => e.code);
+
+        expect(codes, contains(ManifestValidator.unknownVariable));
+        expect(codes, contains(ManifestValidator.unknownTransform));
+        // Named by the message, so not unused.
+        expect(codes, isNot(contains(ManifestValidator.unusedVariable)));
       });
 
       test('MANIFEST_UNKNOWN_TRANSFORM', () {
@@ -349,10 +367,22 @@ variables:
         final r = validator.validate(
           const VariablesInput(
             variables: [projectName],
-            values: {'p': '1-bad start'},
+            values: {'p': 'bad/name'},
           ),
         );
         expect(r, rejectsWith(VariablesValidator.invalidFormat));
+      });
+
+      test('a leading digit is a name; digits alone are not', () {
+        ValidationResult check(String value) => validator.validate(
+          VariablesInput(variables: [projectName], values: {'p': value}),
+        );
+
+        expect(check('3d_viewer').isValid, isTrue);
+        expect(check('2fast').isValid, isTrue);
+        expect(check('123'), rejectsWith(VariablesValidator.invalidFormat));
+        expect(check('-app'), rejectsWith(VariablesValidator.invalidFormat));
+        expect(check('_ my'), rejectsWith(VariablesValidator.invalidFormat));
       });
     });
   });

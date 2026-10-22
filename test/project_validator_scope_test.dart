@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('ProjectValidator honours include/exclude', () {

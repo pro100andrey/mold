@@ -17,7 +17,8 @@ class VariableResolver {
   /// The prompter used for unresolved variables when prompting is enabled.
   final VariablePrompter? prompter;
 
-  /// When true, never prompt: resolve from `--var` and manifest defaults only.
+  /// Whether never to prompt, resolving from `--var` and manifest defaults
+  /// only.
   final bool noPrompt;
 
   /// Resolves [variables] against the [explicit] `--var` map, returning a name

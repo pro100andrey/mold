@@ -1,49 +1,33 @@
 /// `mold` — pack a project into a portable template archive and unpack it
 /// with manifest-driven renaming.
+///
+/// The operations are *pack* and *unpack*, as the CLI names them. The classes
+/// performing them are `Bundler` and `Unbundler`; what they produce keeps the
+/// operation's name — an `UnpackPlan`, an `UnpackStamp`, `UNPACK_…` codes.
+///
+/// `Bundler` packs a project into archive bytes; `Unbundler` plans an unpack
+/// (`UnpackPlan`) and applies it, or describes an archive without unpacking
+/// it (`Unbundler.inspect`, a `TemplateInfo`). `EmbedSource` renders an
+/// archive as a Dart source to ship inside a binary, and `UnifiedDiff`
+/// renders a planned file's change.
+///
+/// Problems with the inputs throw a `ValidationException`; its errors carry
+/// the codes listed in `MoldCode`. Warnings reach an `onWarning` callback as
+/// `ValidationError`s with the same codes. A failing filesystem throws an
+/// `IOException`.
 library;
 
-export 'src/archive/archive_codec.dart'
-    show
-        ArchiveTooLargeException,
-        decodeGzipBounded,
-        defaultMaxDecompressedBytes;
-export 'src/archive/archive_path.dart' show isContainedArchivePath;
-export 'src/archive/archive_reader.dart' show ArchiveReader, BundleArchive;
-export 'src/archive/archive_validator.dart' show ArchiveValidator;
-export 'src/archive/archive_writer.dart' show ArchiveWriter;
-export 'src/bundler/bundler.dart' show Bundler, BundlerBase;
-export 'src/bundler/file_classifier.dart' show FileClassifier, FileKind;
-export 'src/bundler/file_scanner.dart' show FileScanner, ScanResult, SkipReason;
-export 'src/bundler/gitignore.dart' show GitignoreRules;
-export 'src/bundler/project_validator.dart' show ProjectInput, ProjectValidator;
-export 'src/cli/cli.dart'
-    show CliException, PackCommand, UnpackCommand, buildRunner, runBundleCli;
+export 'src/bundler/bundler.dart' show Bundler;
 export 'src/manifest/manifest.dart'
     show Manifest, Substitution, TemplateVariable;
-export 'src/manifest/manifest_validator.dart' show ManifestValidator;
-export 'src/manifest/substitution_template.dart'
-    show
-        LiteralSegment,
-        PlaceholderSegment,
-        SubstitutionTemplate,
-        TemplateError,
-        TemplateErrorKind,
-        TemplateSegment;
 export 'src/output/embed_source.dart' show EmbedSource;
-export 'src/output/output_format.dart' show OutputFormat;
 export 'src/output/unified_diff.dart' show UnifiedDiff;
 export 'src/prompt/variable_prompter.dart' show LineReader, VariablePrompter;
 export 'src/prompt/variable_resolver.dart' show VariableResolver;
-export 'src/unbundler/case_converter.dart' show CaseConverter;
-export 'src/unbundler/case_transform.dart' show CaseTransform;
-export 'src/unbundler/rename_validator.dart' show RenameValidator;
-export 'src/unbundler/substitutor.dart' show Substitutor;
-export 'src/unbundler/target_validator.dart' show TargetValidator;
-export 'src/unbundler/unbundler.dart' show Unbundler, UnbundlerBase;
+export 'src/unbundler/unbundler.dart' show TemplateInfo, Unbundler;
 export 'src/unbundler/unpack_plan.dart' show PlannedFile, UnpackPlan;
-export 'src/unbundler/variables_validator.dart'
-    show VariablesInput, VariablesValidator;
-export 'src/validation/validation_error.dart' show Severity, ValidationError;
-export 'src/validation/validation_result.dart'
-    show ValidationException, ValidationResult;
-export 'src/validation/validator_base.dart' show ValidatorBase;
+export 'src/unbundler/unpack_stamp.dart' show UnpackStamp;
+export 'src/validation/codes.dart' show MoldCode;
+export 'src/validation/validation_error.dart'
+    show Severity, ValidationError, WarningSink;
+export 'src/validation/validation_result.dart' show ValidationException;

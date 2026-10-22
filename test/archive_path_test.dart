@@ -2,8 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 ArchiveFile _entry(String name, String content) {
   final bytes = utf8.encode(content);

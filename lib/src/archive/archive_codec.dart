@@ -23,7 +23,7 @@ class ArchiveTooLargeException extends FormatException {
 ///
 /// A template is a source project, so this is orders of magnitude above any
 /// real one while still refusing an archive engineered to exhaust memory.
-const defaultMaxDecompressedBytes = 512 * 1024 * 1024;
+const int defaultMaxDecompressedBytes = 512 * 1024 * 1024;
 
 /// Gunzips [bytes], refusing to produce more than [maxBytes].
 ///

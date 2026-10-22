@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('path_renames', () {
@@ -26,8 +27,8 @@ void main() {
         manifest: Manifest.fromYaml(manifest),
       );
       final out = Directory('${tmp.path}/out');
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: out.path,
         vars: vars,
       );
@@ -160,7 +161,7 @@ path_renames:
       expect(
         () => Manifest.fromYaml('name: t\nversion: 1\npath_renames:\n  - 3\n'),
         throwsA(
-          isA<FormatException>().having(
+          isA<ValidationException>().having(
             (e) => e.message,
             'message',
             contains('path_renames'),

@@ -1,8 +1,9 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Matches a [ValidationException] carrying [code].
 Matcher rejectsWith(String code) => throwsA(
@@ -44,7 +45,7 @@ void main() {
       );
       final err = StringBuffer();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'pack',
         src.path,
         '-m',
@@ -149,7 +150,7 @@ variables:
       File('${tmp.path}/t.mold').writeAsBytesSync(archive);
       final err = StringBuffer();
 
-      final code = await runBundleCli([
+      final code = await runMoldCli([
         'unpack',
         '${tmp.path}/t.mold',
         '-t',
@@ -178,8 +179,8 @@ variables:
       final out = '${tmp.path}/out';
 
       expect(
-        () => const Unbundler().unbundleBytes(
-          source: poisoned,
+        () => const Unbundler().unbundle(
+          bytes: poisoned,
           targetDir: out,
         ),
         throwsA(isA<Object>()),
@@ -200,8 +201,8 @@ variables:
       final out = Directory('${tmp.path}/out')..createSync();
 
       expect(
-        () => const Unbundler().unbundleBytes(
-          source: _withEntryRenamedToNest(archive),
+        () => const Unbundler().unbundle(
+          bytes: _withEntryRenamedToNest(archive),
           targetDir: out.path,
         ),
         throwsA(isA<Object>()),

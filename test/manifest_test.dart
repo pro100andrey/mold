@@ -1,5 +1,6 @@
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('Manifest', () {
@@ -69,7 +70,7 @@ binary_extensions:
       expect(m.binaryExtensions, ['lockb', '.myblob']);
     });
 
-    test('an extra_substitution missing from/to is a FormatException', () {
+    test('an extra_substitution missing from/to is MANIFEST_INVALID', () {
       expect(
         () => Manifest.fromYaml('''
 name: s
@@ -77,7 +78,13 @@ version: 1.0.0
 extra_substitutions:
   - to: only-to
 '''),
-        throwsA(isA<FormatException>()),
+        throwsA(
+          isA<ValidationException>().having(
+            (e) => e.codes,
+            'codes',
+            [MoldCode.manifestInvalid],
+          ),
+        ),
       );
     });
 

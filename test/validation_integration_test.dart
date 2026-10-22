@@ -1,8 +1,9 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Pulls the set of error codes out of a thrown [ValidationException].
 Set<String> codesOf(ValidationException e) =>
@@ -88,8 +89,8 @@ variables:
       File(p.join(occupied.path, 'f')).writeAsStringSync('x');
 
       try {
-        await const Unbundler().unbundleBytes(
-          source: archive,
+        await const Unbundler().unbundle(
+          bytes: archive,
           targetDir: occupied.path,
           vars: {'project_name': 'my_project'},
         );
@@ -102,8 +103,8 @@ variables:
     test('a valid unbundle still succeeds end-to-end', () async {
       final archive = await packValid();
       final out = p.join(tmp.path, 'out');
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: out,
         vars: {'project_name': 'my_project'},
       );

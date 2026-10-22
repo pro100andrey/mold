@@ -1,6 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:yaml/yaml.dart';
+
+import '../validation/validation_error.dart';
+import '../validation/validation_result.dart';
+import 'manifest_validator.dart';
+import 'yaml_text.dart';
 
 /// One declared rename variable.
 ///
@@ -14,6 +20,8 @@ class TemplateVariable {
     this.description = '',
     this.defaultValue,
     this.replaces,
+    this.pattern,
+    this.choices = const [],
   });
 
   /// The variable key (e.g. `project_name`), used by `--var key=value`.
@@ -29,21 +37,59 @@ class TemplateVariable {
   /// exists only to be interpolated into `extra_substitutions`.
   final String? replaces;
 
+  /// A regular expression the whole value must match, or null for any value.
+  ///
+  /// Anchored by the check itself — `pattern: '[a-z]+'` accepts `abc`, not
+  /// `abc1` — so an author does not have to remember `^…$`.
+  final String? pattern;
+
+  /// The only values allowed, or empty for any value.
+  final List<String> choices;
+
+  /// Whether [value] satisfies [pattern] and [choices].
+  ///
+  /// A [pattern] that does not compile accepts nothing; `ManifestValidator`
+  /// reports it before any value is checked.
+  bool accepts(String value) {
+    if (choices.isNotEmpty && !choices.contains(value)) {
+      return false;
+    }
+    final source = pattern;
+    if (source == null) {
+      return true;
+    }
+    try {
+      return RegExp('^(?:$source)\$').hasMatch(value);
+    } on FormatException {
+      return false;
+    }
+  }
+
   @override
   bool operator ==(Object other) =>
       other is TemplateVariable &&
       other.name == name &&
       other.description == description &&
       other.defaultValue == defaultValue &&
-      other.replaces == replaces;
+      other.replaces == replaces &&
+      other.pattern == pattern &&
+      _listEquals(other.choices, choices);
 
   @override
-  int get hashCode => Object.hash(name, description, defaultValue, replaces);
+  int get hashCode => Object.hash(
+    name,
+    description,
+    defaultValue,
+    replaces,
+    pattern,
+    Object.hashAll(choices),
+  );
 
   @override
   String toString() =>
       'TemplateVariable($name, description: $description, '
-      'default: $defaultValue, replaces: $replaces)';
+      'default: $defaultValue, replaces: $replaces, pattern: $pattern, '
+      'choices: $choices)';
 }
 
 /// A literal text replacement applied to file contents at unpack time, for
@@ -106,35 +152,62 @@ class Manifest {
     this.noSubstitute = const [],
     this.binaryExtensions = const [],
     this.useGitignore = true,
+    this.message,
     this.source,
     this.path,
+    this.unknownKeys = const {},
   });
 
   /// Parses a manifest from raw YAML [text]. [source] defaults to [text] so the
   /// original bytes can be embedded into the archive; [path] records where the
   /// text came from, when it came from a file.
+  ///
+  /// Text that is not YAML, or not shaped like a manifest, is
+  /// `MANIFEST_INVALID` — a [ValidationException] like every other problem
+  /// with the inputs, so a caller handles one exception type. What is
+  /// well-formed but wrong (a missing name, a bad glob) is reported by
+  /// `ManifestValidator`.
   factory Manifest.fromYaml(String text, {String? path}) {
+    try {
+      return Manifest._parse(text, path);
+    } on FormatException catch (e) {
+      final where = path == null ? '' : '$path: ';
+      throw ValidationException([
+        ValidationError(
+          ManifestValidator.invalid,
+          '$where${e is YamlException ? e.toString() : e.message}',
+        ),
+      ]);
+    }
+  }
+
+  factory Manifest._parse(String text, String? path) {
     final doc = loadYaml(text);
     if (doc is! YamlMap) {
       throw const FormatException('Manifest must be a YAML mapping.');
     }
 
+    final unknown = <String, String?>{};
+    _collectUnknown(doc, unknown);
+
     return Manifest(
-      name: _optionalString(doc['name']),
-      version: _optionalString(doc['version']),
-      include: _stringList(doc['include']),
-      exclude: _stringList(doc['exclude']),
+      name: textAt(doc, 'name') ?? '',
+      version: textAt(doc, 'version') ?? '',
+      include: _stringList(doc.nodes['include']),
+      exclude: _stringList(doc.nodes['exclude']),
       variables: _variables(doc['variables']),
       extraSubstitutions: _substitutions(
         doc['extra_substitutions'],
         'extra_substitutions',
       ),
       pathRenames: _substitutions(doc['path_renames'], 'path_renames'),
-      noSubstitute: _stringList(doc['no_substitute']),
-      binaryExtensions: _stringList(doc['binary_extensions']),
+      noSubstitute: _stringList(doc.nodes['no_substitute']),
+      binaryExtensions: _stringList(doc.nodes['binary_extensions']),
       useGitignore: _bool(doc['use_gitignore'], 'use_gitignore', true),
+      message: _text(doc, 'message'),
       source: text,
       path: path,
+      unknownKeys: unknown,
     );
   }
 
@@ -142,10 +215,114 @@ class Manifest {
   factory Manifest.fromFile(String path) {
     final file = File(path);
     if (!file.existsSync()) {
-      throw FormatException('Manifest not found: $path');
+      throw ValidationException([
+        ValidationError(
+          ManifestValidator.notFound,
+          'Manifest not found: $path',
+        ),
+      ]);
     }
 
-    return .fromYaml(file.readAsStringSync(), path: path);
+    return .fromYaml(
+      decodeManifestText(file.readAsBytesSync(), path),
+      path: path,
+    );
+  }
+
+  /// The keys a manifest may hold, at its top level.
+  static const topLevelKeys = [
+    'name',
+    'version',
+    'include',
+    'exclude',
+    'use_gitignore',
+    'variables',
+    'extra_substitutions',
+    'path_renames',
+    'no_substitute',
+    'binary_extensions',
+    'message',
+  ];
+
+  /// The keys a variable's mapping may hold.
+  static const variableKeys = [
+    'description',
+    'default',
+    'replaces',
+    'pattern',
+    'choices',
+  ];
+
+  /// The keys an `extra_substitutions` / `path_renames` entry may hold.
+  static const substitutionKeys = ['from', 'to'];
+
+  /// Records every key of [doc] the format does not define, with the known
+  /// key it is probably a misspelling of.
+  ///
+  /// Shape errors are left to the parsers, which report them with context;
+  /// this only looks where the shape is already right.
+  static void _collectUnknown(YamlMap doc, Map<String, String?> into) {
+    void check(YamlMap map, List<String> known, String prefix) {
+      for (final key in map.keys) {
+        final name = '$key';
+        if (!known.contains(name)) {
+          into['$prefix$name'] = _closest(name, known);
+        }
+      }
+    }
+
+    check(doc, topLevelKeys, '');
+    if (doc['variables'] case final YamlMap variables) {
+      for (final MapEntry(:key, :value) in variables.entries) {
+        if (value is YamlMap) {
+          check(value, variableKeys, 'variables.$key.');
+        }
+      }
+    }
+    for (final section in ['extra_substitutions', 'path_renames']) {
+      if (doc[section] case final YamlList entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i] case final YamlMap entry) {
+            check(entry, substitutionKeys, '$section[$i].');
+          }
+        }
+      }
+    }
+  }
+
+  /// The entry of [known] within two edits of [key], if there is one —
+  /// `excludes` → `exclude`, `replace` → `replaces`.
+  static String? _closest(String key, List<String> known) {
+    String? best;
+    var bestDistance = 3;
+    for (final candidate in known) {
+      final d = _distance(key, candidate);
+      if (d < bestDistance) {
+        best = candidate;
+        bestDistance = d;
+      }
+    }
+
+    return best;
+  }
+
+  /// Levenshtein distance; keys are short, so the plain table is plenty.
+  static int _distance(String a, String b) {
+    var previous = List<int>.generate(b.length + 1, (j) => j);
+    for (var i = 1; i <= a.length; i++) {
+      final current = List<int>.filled(b.length + 1, 0)..[0] = i;
+      for (var j = 1; j <= b.length; j++) {
+        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+        current[j] = [
+          previous[j] + 1,
+          current[j - 1] + 1,
+          previous[j - 1] + cost,
+        ].reduce((x, y) => x < y ? x : y);
+      }
+      previous = current;
+    }
+
+    return previous[b.length];
   }
 
   /// Template name; also the default output file stem.
@@ -198,6 +375,13 @@ class Manifest {
   /// exactly as it sits on disk.
   final bool useGitignore;
 
+  /// What to tell the person once the project is unpacked — next steps, a
+  /// command to run — or null for nothing.
+  ///
+  /// A template like a substitution's `to:`: `{{ name }}` and
+  /// `{{ name | transform }}` render with the resolved values.
+  final String? message;
+
   /// The verbatim YAML this manifest was parsed from, when available. Embedded
   /// into the archive as `mold.yaml`.
   final String? source;
@@ -209,6 +393,16 @@ class Manifest {
   /// exclude the manifest from its own token search: a `replaces:` line is not
   /// evidence that the project uses the token.
   final String? path;
+
+  /// Keys in the parsed YAML that the format does not define, by where they
+  /// sit (`excludes`, `variables.name.replace`, `path_renames[0].form`), each
+  /// with the known key it is probably a misspelling of, or null.
+  ///
+  /// Provenance like [path]: not a manifest field, not part of equality.
+  /// Parsing stays lenient — an unknown key is reported, not rejected — but it
+  /// is never silent: `excludes:` for `exclude:` would otherwise pack exactly
+  /// the files it was written to keep out.
+  final Map<String, String?> unknownKeys;
 
   /// Every glob pattern this manifest declares, in one place.
   ///
@@ -253,7 +447,8 @@ class Manifest {
       _listEquals(other.pathRenames, pathRenames) &&
       _listEquals(other.noSubstitute, noSubstitute) &&
       _listEquals(other.binaryExtensions, binaryExtensions) &&
-      other.useGitignore == useGitignore;
+      other.useGitignore == useGitignore &&
+      other.message == message;
 
   @override
   int get hashCode => Object.hash(
@@ -267,6 +462,7 @@ class Manifest {
     Object.hashAll(noSubstitute),
     Object.hashAll(binaryExtensions),
     useGitignore,
+    message,
   );
 
   /// Field-by-field, so a failed round-trip assertion names the field that
@@ -278,7 +474,7 @@ class Manifest {
       'extraSubstitutions: $extraSubstitutions, '
       'pathRenames: $pathRenames, '
       'noSubstitute: $noSubstitute, binaryExtensions: $binaryExtensions, '
-      'useGitignore: $useGitignore)';
+      'useGitignore: $useGitignore, message: $message)';
 
   /// Renders this manifest back to YAML, for embedding a manifest that was
   /// built in code rather than read from a file (where [source] is null).
@@ -299,9 +495,14 @@ class Manifest {
       for (final v in variables) {
         final defaultValue = v.defaultValue;
         final replaces = v.replaces;
+        final pattern = v.pattern;
         // A variable with no sub-fields still needs an explicit empty mapping:
         // a bare `name:` parses back as null, not as a mapping.
-        if (v.description.isEmpty && defaultValue == null && replaces == null) {
+        if (v.description.isEmpty &&
+            defaultValue == null &&
+            replaces == null &&
+            pattern == null &&
+            v.choices.isEmpty) {
           buffer.writeln('  ${_scalar(v.name)}: {}');
           continue;
         }
@@ -319,6 +520,17 @@ class Manifest {
         if (replaces != null) {
           buffer.writeln('    replaces: ${_scalar(replaces)}');
         }
+
+        if (pattern != null) {
+          buffer.writeln('    pattern: ${_scalar(pattern)}');
+        }
+
+        if (v.choices.isNotEmpty) {
+          buffer.writeln('    choices:');
+          for (final choice in v.choices) {
+            buffer.writeln('      - ${_scalar(choice)}');
+          }
+        }
       }
     }
 
@@ -331,6 +543,10 @@ class Manifest {
 
     _writeList(buffer, 'no_substitute', noSubstitute);
     _writeList(buffer, 'binary_extensions', binaryExtensions);
+
+    if (message case final text?) {
+      buffer.writeln('message: ${_scalar(text)}');
+    }
 
     return buffer.toString();
   }
@@ -381,19 +597,37 @@ class Manifest {
         .replaceAll('"', r'\"')
         .replaceAll('\n', r'\n')
         .replaceAll('\r', r'\r')
-        .replaceAll('\t', r'\t');
+        .replaceAll('\t', r'\t')
+        // YAML allows only printable characters in a scalar: every other
+        // control character must be an escape to read back.
+        .replaceAllMapped(_nonPrintable, (m) {
+          final hex = m[0]!.codeUnitAt(0).toRadixString(16).padLeft(2, '0');
+          return '\\x$hex';
+        });
     return '"$escaped"';
   }
 
-  /// Reads an optional scalar as a string; missing → empty. Required-field
-  /// enforcement is the `ManifestValidator`'s job, so parsing stays lenient.
-  static String _optionalString(Object? value) =>
-      value == null ? '' : value.toString();
+  /// The C0 and C1 controls and DEL that YAML's printable set leaves out;
+  /// tab, line feed, carriage return and NEL are printable.
+  static final _nonPrintable = RegExp(
+    r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F]',
+  );
+
+  /// Reads an optional text field: a scalar, as written. A list or a mapping
+  /// is refused rather than printed as its `toString`.
+  static String? _text(YamlMap doc, String key) {
+    final node = doc.nodes[key];
+    if (node != null && node is! YamlScalar) {
+      throw FormatException("'$key' must be text, but got: ${node.value}.");
+    }
+
+    return textAt(doc, key);
+  }
 
   /// Reads an optional boolean field, falling back to [fallback] when absent.
   ///
   /// A cast (`as bool?`) threw `TypeError` for anything else, which no caller
-  /// catches: the CLI handles `FormatException` and exits 1, but a `TypeError`
+  /// catches: a `FormatException` becomes `MANIFEST_INVALID`, but a `TypeError`
   /// escaped as an exit-255 crash with a stack trace. `use_gitignore: yes` is
   /// enough to trigger it — YAML 1.1 spelled booleans that way, and
   /// `package:yaml` is 1.2, where `yes` is the string "yes".
@@ -411,16 +645,18 @@ class Manifest {
     return value;
   }
 
-  static List<String> _stringList(Object? value) {
-    if (value == null) {
+  static List<String> _stringList(YamlNode? node) {
+    if (node == null || node.value == null) {
       return const [];
     }
 
-    if (value is! YamlList) {
-      throw FormatException('Expected a list but got: $value');
+    if (node is! YamlList) {
+      throw FormatException('Expected a list but got: ${node.value}');
     }
 
-    return value.map((e) => e.toString()).toList(growable: false);
+    return [
+      for (final item in node.nodes) nodeText(item) ?? '',
+    ].toList(growable: false);
   }
 
   static List<TemplateVariable> _variables(Object? value) {
@@ -445,9 +681,11 @@ class Manifest {
 
     return TemplateVariable(
       name: name,
-      description: (spec['description'] as Object?)?.toString() ?? '',
-      defaultValue: (spec['default'] as Object?)?.toString(),
-      replaces: (spec['replaces'] as Object?)?.toString(),
+      description: textAt(spec, 'description') ?? '',
+      defaultValue: textAt(spec, 'default'),
+      replaces: textAt(spec, 'replaces'),
+      pattern: textAt(spec, 'pattern'),
+      choices: _stringList(spec.nodes['choices']),
     );
   }
 
@@ -469,8 +707,8 @@ class Manifest {
       throw FormatException('Each $key entry must be a mapping with from/to.');
     }
 
-    final from = item['from'];
-    final to = item['to'];
+    final from = textAt(item, 'from');
+    final to = textAt(item, 'to');
     if (from is! String || from.isEmpty) {
       throw FormatException("A $key entry needs a non-empty 'from'.");
     }
@@ -480,5 +718,23 @@ class Manifest {
     }
 
     return Substitution(from: from, to: to);
+  }
+}
+
+/// The text of a manifest's bytes, read from [where].
+///
+/// Bytes that are not UTF-8 are `MANIFEST_INVALID`, like text that is not
+/// YAML, rather than the bare [FormatException] `utf8.decode` throws — which
+/// no caller handling [ValidationException] would catch.
+String decodeManifestText(List<int> bytes, String where) {
+  try {
+    return utf8.decode(bytes);
+  } on FormatException {
+    throw ValidationException([
+      ValidationError(
+        ManifestValidator.invalid,
+        '$where: not UTF-8 text.',
+      ),
+    ]);
   }
 }

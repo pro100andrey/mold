@@ -1,8 +1,9 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Matches a result carrying an error-severity issue with the given code.
 Matcher rejectsWith(String code) => predicate<ValidationResult>(
@@ -89,10 +90,9 @@ const binaryExtensions = [];
       );
     });
 
-    test('a self-named project warns rather than blocking', () {
-      // The benign case: a project's own generated filename extends its name.
-      // Measured at 14% on the real flutter_application corpus.
-      writeFile('flutter_application_android.iml', 'x');
+    test('modest over-reach warns rather than blocking', () {
+      // One collateral match in ten: 10%, inside the warning band.
+      writeFile('lib/plural.dart', 'const x = "flutter_applications";');
       for (var i = 0; i < 9; i++) {
         writeFile('lib/f$i.dart', 'const x = "flutter_application";');
       }
@@ -110,6 +110,113 @@ const binaryExtensions = [];
 
       expect(r.isValid, isTrue);
       expect(r.warnings, isEmpty);
+    });
+  });
+
+  group('a match ends where its casing ends a word', () {
+    late Directory tmp;
+
+    setUp(() => tmp = Directory.systemTemp.createTempSync('mold_boundary_'));
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    /// The collateral identifiers [replaces] finds in [content], most frequent
+    /// first — empty when every match is a whole word.
+    List<String> collateral(String replaces, String content) {
+      File(p.join(tmp.path, 'a.txt')).writeAsStringSync(content);
+      final r = const ProjectValidator().validate(
+        ProjectInput(
+          dir: tmp.path,
+          manifest: Manifest(
+            name: 'x',
+            version: '1',
+            variables: [TemplateVariable(name: 'p', replaces: replaces)],
+          ),
+        ),
+      );
+      final issue = [...r.errors, ...r.warnings].where(
+        (e) =>
+            e.code == ProjectValidator.partialOverlap ||
+            e.code == ProjectValidator.tokenTooGeneric,
+      );
+
+      return issue.isEmpty ? const [] : [issue.single.message];
+    }
+
+    // One clean match beside the probe keeps the verdict out of the "not
+    // found" path, and one is enough to push a single collateral hit over
+    // both thresholds — so an empty result means the probe was clean.
+    for (final clean in [
+      'app_template_test', // snake: `_` after
+      'my_app_template', // snake: `_` before
+      'app_template_g', // generated-identifier suffix
+      'APP_TEMPLATE_TEST', // SCREAMING: `_` after
+      'app-template-test', // kebab: `-` after
+      'app-template_test', // kebab: `_` after
+      'AppTemplateTest', // Pascal: capital after
+      'MyAppTemplate', // Pascal: lowercase before
+      'HTTPAppTemplate', // Pascal: capital before
+      'AppTemplate2', // Pascal: digit after
+    ]) {
+      test('$clean is a whole-word match', () {
+        expect(collateral('app_template', 'app_template $clean'), isEmpty);
+      });
+    }
+
+    for (final (token, buried) in [
+      ('my_app', 'my_appendix'),
+      ('app', 'application'),
+      ('my_app', 'MyApplication'),
+      ('app_template', 'AppTemplateer'),
+      ('app_template', 'APP_TEMPLATES'),
+      ('app_template', 'xapp_template'),
+      ('app_template', 'app-templates'),
+      ('app_template', 'app_template2'),
+    ]) {
+      test('$token inside $buried is still over-reach', () {
+        final found = collateral(token, '$token $buried');
+
+        expect(found, hasLength(1));
+        expect(found.single, contains(buried));
+      });
+    }
+
+    test('a project named app_template packs without a warning', () async {
+      // The downstream case: its own test package and generated identifiers
+      // extend the name with `_`, and renaming them is the point.
+      final project = Directory(p.join(tmp.path, 'app_template'))..createSync();
+      void write(String rel, String content) {
+        File(p.join(project.path, rel))
+          ..parent.createSync(recursive: true)
+          ..writeAsStringSync(content);
+      }
+
+      write('pubspec.yaml', 'name: app_template\n');
+      write('lib/app_template.dart', 'class AppTemplate {}\n');
+      write(
+        'test/app_template_test.dart',
+        "import 'package:app_template/app_template.dart';\n"
+            'final app_template_g = AppTemplate();\n',
+      );
+      write(
+        'app_template_test/pubspec.yaml',
+        'name: app_template_test\n'
+            'dependencies:\n  app_template:\n    path: ../\n',
+      );
+
+      final warnings = <String>[];
+      await const Bundler().bundle(
+        projectDir: project.path,
+        manifest: const Manifest(
+          name: 'app_template',
+          version: '1',
+          variables: [
+            TemplateVariable(name: 'name', replaces: 'app_template'),
+          ],
+        ),
+        onWarning: (w) => warnings.add('$w'),
+      );
+
+      expect(warnings, isEmpty);
     });
   });
 

@@ -104,6 +104,7 @@ class FileScanner {
     List<String> include = const [],
     List<String> exclude = const [],
     this.useGitignore = false,
+    this.reserved = const {},
   }) : _include = include.map(Glob.new).toList(growable: false),
        _exclude = exclude.map(Glob.new).toList(growable: false);
 
@@ -116,6 +117,11 @@ class FileScanner {
   /// globs. `Bundler` passes the manifest's `use_gitignore`, which defaults to
   /// true.
   final bool useGitignore;
+
+  /// Paths, relative to the source root, that are never packed whatever the
+  /// filters say — mold's own records about a directory, which describe that
+  /// one directory and would be wrong anywhere it was unpacked.
+  final Set<String> reserved;
 
   /// Scans [sourceDir]. An empty include set means "all files".
   ///
@@ -173,7 +179,7 @@ class FileScanner {
       }
 
       final isFile = entity is File;
-      if (!isFile && entity is! Link) {
+      if ((!isFile && entity is! Link) || reserved.contains(rel)) {
         continue;
       }
 

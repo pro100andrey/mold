@@ -1,7 +1,8 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// Asserts [key] is absent as a top-level YAML key.
 ///
@@ -32,6 +33,7 @@ void main() {
         ],
         noSubstitute: ['pubspec.lock', '**/*.g.dart'],
         binaryExtensions: ['myblob'],
+        message: 'cd {{ project_name }}\n  dart pub get\n',
       );
 
       // One assertion over the whole value, so a field added to Manifest but
@@ -82,6 +84,36 @@ void main() {
       expect(parsed.extraSubstitutions[1].to, 'a\tb');
     });
 
+    test('escapes control characters YAML cannot hold as written', () {
+      const original = Manifest(
+        name: 'x',
+        version: '1',
+        extraSubstitutions: [
+          Substitution(from: 'a\x00b\x1bc\x7fd', to: 'e\x85f\x9fg'),
+        ],
+      );
+
+      final parsed = Manifest.fromYaml(original.toYaml());
+
+      expect(parsed.extraSubstitutions.single.from, 'a\x00b\x1bc\x7fd');
+      expect(parsed.extraSubstitutions.single.to, 'e\x85f\x9fg');
+    });
+
+    test('a message that is not text is MANIFEST_INVALID', () {
+      for (final value in ['[Run make, Then test]', '{a: b}']) {
+        expect(
+          () => Manifest.fromYaml('name: x\nversion: 1\nmessage: $value\n'),
+          throwsA(
+            isA<ValidationException>().having(
+              (e) => e.codes,
+              'codes',
+              [MoldCode.manifestInvalid],
+            ),
+          ),
+        );
+      }
+    });
+
     test('omits empty sections', () {
       const minimal = Manifest(name: 'x', version: '1');
       final yaml = minimal.toYaml();
@@ -129,8 +161,8 @@ void main() {
       expect(embedded.variables, hasLength(1));
       expect(embedded.variables.first.replaces, 'super_server');
 
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
         vars: const {'project_name': 'my_project'},
       );
@@ -216,10 +248,16 @@ void main() {
       expect(parsed.source, isNotNull);
     });
 
-    test('fromFile on a missing path is a FormatException', () {
+    test('fromFile on a missing path is MANIFEST_NOT_FOUND', () {
       expect(
         () => Manifest.fromFile('/nonexistent/mold.yaml'),
-        throwsA(isA<FormatException>()),
+        throwsA(
+          isA<ValidationException>().having(
+            (e) => e.codes,
+            'codes',
+            [MoldCode.manifestNotFound],
+          ),
+        ),
       );
     });
   });

@@ -3,8 +3,9 @@ library;
 
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('symlinks', () {
@@ -177,8 +178,8 @@ void main() {
         projectDir: src.path,
         manifest: manifest,
       );
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
         vars: const {'project_name': 'my_project'},
       );

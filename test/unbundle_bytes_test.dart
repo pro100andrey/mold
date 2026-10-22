@@ -1,13 +1,13 @@
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'embed_source_test.dart' show parseBytesSource;
+import 'support/internals.dart';
 
 void main() {
-  group('unbundleBytes + embed round-trip', () {
+  group('unbundle + embed round-trip', () {
     late Directory tmp;
     late Directory project;
 
@@ -31,12 +31,7 @@ variables:
     replaces: super_server
 ''');
 
-    test('the base classes are implemented', () {
-      expect(const Bundler(), isA<BundlerBase>());
-      expect(const Unbundler(), isA<UnbundlerBase>());
-    });
-
-    test('unbundleBytes matches unbundleFile from the same archive', () async {
+    test('unbundle matches unbundleFile from the same archive', () async {
       final archive = await const Bundler().bundle(
         projectDir: project.path,
         manifest: manifest(),
@@ -52,8 +47,8 @@ variables:
       );
 
       final fromBytes = p.join(tmp.path, 'from_bytes');
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: fromBytes,
         vars: {'project_name': 'my_project'},
       );
@@ -62,7 +57,7 @@ variables:
     });
 
     test(
-      'bundle → emit bytes source → load → unbundleBytes → renamed tree',
+      'bundle → emit bytes source → load → unbundle → renamed tree',
       () async {
         final archive = await const Bundler().bundle(
           projectDir: project.path,
@@ -79,8 +74,8 @@ variables:
         expect(loaded, archive);
 
         final out = p.join(tmp.path, 'out');
-        await const Unbundler().unbundleBytes(
-          source: loaded,
+        await const Unbundler().unbundle(
+          bytes: loaded,
           targetDir: out,
           vars: {'project_name': 'my_project'},
         );

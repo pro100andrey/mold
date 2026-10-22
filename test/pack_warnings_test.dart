@@ -3,8 +3,9 @@ library;
 
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('pack-phase warnings reach the caller', () {
@@ -22,7 +23,7 @@ void main() {
     Future<void> pack(Manifest manifest) => const Bundler().bundle(
       projectDir: src.path,
       manifest: manifest,
-      onWarning: warnings.add,
+      onWarning: (w) => warnings.add('$w'),
     );
 
     test('a symlink left out of the archive is reported', () async {

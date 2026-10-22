@@ -1,5 +1,6 @@
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('FileClassifier', () {

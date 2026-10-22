@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 void main() {
   group('non-UTF-8 content', () {
@@ -36,8 +37,8 @@ void main() {
         projectDir: src.path,
         manifest: manifest,
       );
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
         vars: const {'project_name': 'my_project'},
       );
@@ -67,8 +68,8 @@ void main() {
           manifest: manifest,
         );
 
-        await const Unbundler().unbundleBytes(
-          source: archive,
+        await const Unbundler().unbundle(
+          bytes: archive,
           targetDir: '${tmp.path}/out',
         );
 
@@ -111,8 +112,8 @@ void main() {
           ],
         ),
       );
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
         vars: const {'p': 'my_project'},
       );
@@ -140,8 +141,8 @@ void main() {
           ],
         ),
       );
-      await const Unbundler().unbundleBytes(
-        source: archive,
+      await const Unbundler().unbundle(
+        bytes: archive,
         targetDir: '${tmp.path}/out',
         vars: const {'p': 'my_project'},
       );

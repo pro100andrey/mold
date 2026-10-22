@@ -1,5 +1,6 @@
-import 'package:mold/mold.dart';
 import 'package:test/test.dart';
+
+import 'support/internals.dart';
 
 /// A prompter backed by a scripted queue of input lines (no real stdin).
 VariablePrompter scriptedPrompter(List<String?> lines, StringSink out) {
@@ -11,6 +12,69 @@ VariablePrompter scriptedPrompter(List<String?> lines, StringSink out) {
 }
 
 void main() {
+  group('VariablePrompter', () {
+    const platform = TemplateVariable(
+      name: 'platform',
+      choices: ['android', 'ios'],
+    );
+
+    test('asks again for an answer validation would refuse', () {
+      final out = StringBuffer();
+      final value = scriptedPrompter([
+        'windows',
+        'ios',
+      ], out).promptFor(platform);
+
+      expect(value, 'ios');
+      expect(out.toString(), contains("value 'windows' is not one of"));
+    });
+
+    test('checks a replaces value is a name token', () {
+      const name = TemplateVariable(name: 'name', replaces: 'app');
+      final out = StringBuffer();
+      final value = scriptedPrompter([
+        'my app!',
+        'my_app',
+      ], out).promptFor(name);
+
+      expect(value, 'my_app');
+      expect(out.toString(), contains('not a valid name token'));
+    });
+
+    test('gives up after maxAttempts, leaving it to the validator', () {
+      var reads = 0;
+      final value = VariablePrompter(StringBuffer(), () {
+        reads++;
+        return 'windows';
+      }).promptFor(platform);
+
+      expect(value, 'windows');
+      expect(reads, VariablePrompter.maxAttempts);
+    });
+
+    test('end of input after a refused answer keeps that answer', () {
+      // Not the default: that would scaffold a value nobody gave, exit 0.
+      const withDefault = TemplateVariable(
+        name: 'platform',
+        choices: ['android', 'ios'],
+        defaultValue: 'android',
+      );
+      final value = scriptedPrompter([
+        'windows',
+        null,
+      ], StringBuffer()).promptFor(withDefault);
+
+      expect(value, 'windows');
+    });
+
+    test('end of input before any answer is no answer', () {
+      expect(
+        scriptedPrompter([null], StringBuffer()).promptFor(platform),
+        isNull,
+      );
+    });
+  });
+
   group('VariableResolver', () {
     const projectName = TemplateVariable(
       name: 'project_name',
