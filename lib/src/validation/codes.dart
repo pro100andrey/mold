@@ -143,10 +143,11 @@ abstract final class MoldCode {
 
   // ─── target (unpack) ──────────────────────────────────────────────────────
 
-  /// The target's parent directory is missing.
-  static const String targetParentNotFound = TargetValidator.parentNotFound;
+  /// The target, or a directory on the way to it, is a file. Missing
+  /// directories are not a problem: the unpack creates them.
+  static const String targetNotDirectory = TargetValidator.notDirectory;
 
-  /// The target is a file, or not empty without overwrite.
+  /// The target is a non-empty directory, without overwrite.
   static const String targetOccupied = TargetValidator.occupied;
 
   /// No write permission.

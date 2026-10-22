@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.0
+
+Fills the gaps a library caller of 0.2.0 ran into.
+
+### Breaking
+
+- **Missing parents are created.** `mold unpack -t a/b/app` into a directory
+  whose parents do not exist creates them, as it already created the target;
+  `TARGET_PARENT_NOT_FOUND` is gone. Validating creates nothing, so a
+  `--dry-run` into a new nested directory now checks the target instead of
+  failing on it, and a failed unpack removes the parents it made.
+- **`TARGET_NOT_DIRECTORY` is split from `TARGET_OCCUPIED`.** A target that
+  is a file — or has a file on the way to it — is `TARGET_NOT_DIRECTORY`
+  (`MoldCode.targetNotDirectory`); `TARGET_OCCUPIED` is a non-empty
+  directory alone, the one an overwrite accepts.
+- Library messages no longer name CLI flags: `TARGET_OCCUPIED` and
+  `UNPACK_STAMP_FOREIGN` speak of an overwrite unpack and of one writing no
+  stamp. `mold unpack` adds the flag — `--force`, `--stamp` — to the message
+  it prints.
+
+### Added
+
+- **`rewrite:` on `Unbundler.plan`, `unbundle` and `unbundleFile`** — a
+  `FileRewriter` called once per template file while planning, with where it
+  lands and what substitution made of it, returning the bytes to write.
+  Because it runs inside planning, `identicalToExisting`, `editedSinceStamp`
+  and the stamp's digests are about the rewritten bytes — rebuilding a
+  `PlannedFile` afterwards could not keep those right, and would drop any
+  field added later. A changed file is `PlannedFile.rewritten`, counts in
+  `UnpackPlan.rewritten`, and is not `untouched`.
+- **The `yamlString` transform** writes a value as a YAML scalar: plain when
+  it reads back as the same string (also in flow context and to YAML 1.1
+  parsers), double-quoted with escapes otherwise — a Windows path, `a: b`,
+  `yes`, `42`, an empty value. `{{ dir | yamlString }}` goes where a scalar
+  goes, without the template's own quotes.
+- **`doc:` on `EmbedSource.bytesSource` and `base64Source`** — written above
+  the constant as its `///` comment.
+
 ## 0.2.0
 
 A breaking release — the library is still alpha — reshaping the API around

@@ -6,6 +6,10 @@ import 'package:path/path.dart' as p;
 import '../prompt/variable_prompter.dart';
 import '../prompt/variable_resolver.dart';
 import '../unbundler/unbundler.dart';
+import '../unbundler/unpack_plan.dart';
+import '../validation/codes.dart';
+import '../validation/validation_error.dart';
+import '../validation/validation_result.dart';
 import 'command_base.dart';
 import 'plan_report.dart';
 
@@ -97,20 +101,26 @@ class UnpackCommand extends MoldCommand {
     // One plan, applied as it was shown: the preview and the write are the
     // same computation.
     const unbundler = Unbundler();
-    final plan = unbundler.plan(
-      bytes: await readArchiveSource(source),
-      targetDir: targetDir,
-      vars: vars,
-      recorded: recorded,
-      resolver: resolver,
-      overwrite: results['force'] as bool,
-      stamp: results['stamp'] as bool,
-      // A summary needs counts, not content.
-      withContent: showDiff,
-      onWarning: warn,
-    );
-    if (!dryRun) {
-      await unbundler.apply(plan, onWarning: warn);
+    final bytes = await readArchiveSource(source);
+    final UnpackPlan plan;
+    try {
+      plan = unbundler.plan(
+        bytes: bytes,
+        targetDir: targetDir,
+        vars: vars,
+        recorded: recorded,
+        resolver: resolver,
+        overwrite: results['force'] as bool,
+        stamp: results['stamp'] as bool,
+        // A summary needs counts, not content.
+        withContent: showDiff,
+        onWarning: warn,
+      );
+      if (!dryRun) {
+        await unbundler.apply(plan, onWarning: warn);
+      }
+    } on ValidationException catch (e) {
+      throw ValidationException([for (final error in e.errors) _hint(error)]);
     }
 
     if (wantsJson) {
@@ -125,5 +135,25 @@ class UnpackCommand extends MoldCommand {
     }
 
     return 0;
+  }
+
+  /// [error], with the flag that resolves it when there is one. The library
+  /// speaks of its parameters, not of this command's flags.
+  static ValidationError _hint(ValidationError error) {
+    final hint = switch (error.code) {
+      MoldCode.targetOccupied => '--force writes into it.',
+      MoldCode.unpackStampForeign => 'Unpack without --stamp to leave it.',
+      _ => null,
+    };
+    if (hint == null) {
+      return error;
+    }
+
+    return ValidationError(
+      error.code,
+      '${error.message} $hint',
+      field: error.field,
+      severity: error.severity,
+    );
   }
 }

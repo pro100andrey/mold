@@ -80,6 +80,7 @@ class Unbundler {
   ///
   /// With [overwrite], [targetDir] may already hold files — see [apply].
   /// With [stamp], the unpack records itself in the target — see [plan].
+  /// [rewrite] changes files' bytes as they are planned — see [plan].
   ///
   /// [onWarning] receives non-fatal problems that would otherwise be silent,
   /// such as a token that over-reaches or failing to restore an executable
@@ -92,6 +93,7 @@ class Unbundler {
     VariableResolver? resolver,
     bool overwrite = false,
     bool stamp = false,
+    FileRewriter? rewrite,
     WarningSink? onWarning,
   }) async {
     final planned = plan(
@@ -103,6 +105,7 @@ class Unbundler {
       overwrite: overwrite,
       stamp: stamp,
       withContent: false,
+      rewrite: rewrite,
       onWarning: onWarning,
     );
     await apply(planned, onWarning: onWarning);
@@ -119,6 +122,7 @@ class Unbundler {
     VariableResolver? resolver,
     bool overwrite = false,
     bool stamp = false,
+    FileRewriter? rewrite,
     WarningSink? onWarning,
   }) async {
     await unbundle(
@@ -129,6 +133,7 @@ class Unbundler {
       resolver: resolver,
       overwrite: overwrite,
       stamp: stamp,
+      rewrite: rewrite,
       onWarning: onWarning,
     );
   }
@@ -185,6 +190,9 @@ class Unbundler {
   /// is `VARIABLE_DROPPED`, a warning: a template that dropped a variable must
   /// not make its own stamp unusable.
   ///
+  /// [rewrite] changes a template file's bytes after substitution — see
+  /// [FileRewriter]. A rewritten file is [PlannedFile.rewritten].
+  ///
   /// [onWarning] receives the same warnings a real unpack would report, so a
   /// preview is not quieter than the thing it previews.
   UnpackPlan plan({
@@ -196,6 +204,7 @@ class Unbundler {
     bool overwrite = false,
     bool stamp = false,
     bool withContent = true,
+    FileRewriter? rewrite,
     WarningSink? onWarning,
   }) {
     final (archive, manifest) = _open(bytes, onWarning);
@@ -210,6 +219,7 @@ class Unbundler {
       overwrite: overwrite,
       stamp: stamp,
       withContent: withContent,
+      rewrite: rewrite,
       onWarning: onWarning,
     );
   }
@@ -226,6 +236,7 @@ class Unbundler {
     required bool overwrite,
     required bool stamp,
     required bool withContent,
+    required FileRewriter? rewrite,
     required WarningSink? onWarning,
   }) {
     // A null target means "no destination in mind" — previewing the
@@ -302,6 +313,7 @@ class Unbundler {
           content,
           executable: archive.executable.contains(from),
           withContent: withContent,
+          rewrite: rewrite,
           existing: existing(renames[from]!),
           stamped: previous == null
               ? null
@@ -468,8 +480,8 @@ class Unbundler {
       if (stamp)
         ValidationError(
           stampForeign,
-          '$what, and one stamp describes one template. Unpack without '
-          '--stamp (`stamp: false`) to leave it as it is.',
+          '$what, and one stamp describes one template. An unpack that '
+          'writes no stamp leaves it as it is.',
         )
       else
         ValidationError.warning(
@@ -574,6 +586,7 @@ class Unbundler {
     Uint8List content, {
     required bool executable,
     required bool withContent,
+    required FileRewriter? rewrite,
     required File? existing,
     // The digest the target's stamp records for [to]: null with no stamp,
     // [_untracked] when the stamp does not list it.
@@ -594,6 +607,15 @@ class Unbundler {
       }
     }
 
+    var rewritten = false;
+    if (rewrite != null) {
+      final out = rewrite(to, bytes);
+      if (!sameBytes(out, bytes)) {
+        bytes = out is Uint8List ? out : Uint8List.fromList(out);
+        rewritten = true;
+      }
+    }
+
     final onDisk = existing != null && existing.existsSync()
         ? existing.readAsBytesSync()
         : null;
@@ -603,6 +625,9 @@ class Unbundler {
     // `no_substitute` lock file, say — so an overwrite of it diffs as one
     // rather than as "binary".
     final text = withContent ? before ?? _tryDecode(content) : null;
+    final written = rewritten
+        ? (withContent ? _tryDecode(bytes) : null)
+        : (withContent ? after ?? text : null);
 
     return PlannedFile(
       from: from,
@@ -611,8 +636,9 @@ class Unbundler {
       replacements: replacements,
       bytes: bytes,
       executable: executable,
+      rewritten: rewritten,
       before: text,
-      after: withContent ? after ?? text : null,
+      after: written,
       overwrites: onDisk != null,
       identicalToExisting: identical,
       existing: withContent && onDisk != null ? _tryDecode(onDisk) : null,
@@ -677,8 +703,19 @@ class Unbundler {
     // into an existing directory must not delete that directory; one that
     // created it must not leave the debris behind.
     final preexisting = Directory(targetDir).existsSync();
+    // The missing directories above it, innermost first: made here, so they
+    // are ours to remove too.
+    final above = <Directory>[
+      if (!preexisting)
+        for (
+          var d = Directory(targetDir).absolute.parent;
+          !d.existsSync() && d.path != d.parent.path;
+          d = d.parent
+        )
+          d,
+    ];
     final root = Directory(targetDir)..createSync(recursive: true);
-    final undo = _Undo(root.path, preexisting: preexisting);
+    final undo = _Undo(root.path, preexisting: preexisting, above: above);
     final restoreExecutable = <String>[];
     try {
       for (final file in plan.files) {
@@ -809,6 +846,7 @@ UnpackPlan planCollected(
   overwrite: false,
   stamp: false,
   withContent: true,
+  rewrite: null,
   onWarning: onWarning,
 );
 
@@ -818,9 +856,12 @@ UnpackPlan planCollected(
 /// thrown, because the write error that triggered the undo is the one worth
 /// reporting, and masking it with a cleanup error would hide the cause.
 class _Undo {
-  _Undo(this._root, {required this._preexisting});
+  _Undo(this._root, {required this._preexisting, this._above = const []});
 
   final String _root;
+
+  /// The directories created above [_root] to make it, innermost first.
+  final List<Directory> _above;
 
   /// Whether [_root] existed before the unpack — deleting a directory the
   /// user already had would turn a failed unpack into data loss.
@@ -878,10 +919,16 @@ class _Undo {
   /// Undoes everything recorded; returns the paths it could not restore.
   List<String> run() {
     if (!_preexisting) {
-      // Everything under it is ours, so there is nothing to restore.
-      return _attempt(() => Directory(_root).deleteSync(recursive: true))
-          ? const []
-          : [_root];
+      // Everything under it is ours, so there is nothing to restore. Above
+      // it, only while empty, like the directories below.
+      if (!_attempt(() => Directory(_root).deleteSync(recursive: true))) {
+        return [_root];
+      }
+      for (final dir in _above) {
+        _attempt(dir.deleteSync);
+      }
+
+      return const [];
     }
 
     final failed = <String>[

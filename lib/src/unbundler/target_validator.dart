@@ -6,10 +6,15 @@ import '../validation/validation_error.dart';
 import '../validation/validation_result.dart';
 import '../validation/validator_base.dart';
 
-/// Validates the unpack destination (unpack phase): the parent directory
-/// exists, the destination is free, and the parent is writable. Checks
-/// short-circuit — a missing parent reports alone, since the rest can't be
-/// probed.
+/// Validates the unpack destination (unpack phase): it is, or can become, a
+/// directory, it is free, and it is writable. Checks short-circuit — a target
+/// that cannot be a directory reports alone, since the rest can't be probed.
+///
+/// Missing directories on the way to the target are fine: the unpack creates
+/// them, like the target itself. Only a file in the way is refused — at the
+/// target ([notDirectory]) or at one of its parents. Validating creates
+/// nothing, so a dry run into a new nested directory checks the same things
+/// the real unpack does.
 ///
 /// With [overwrite], a non-empty directory is accepted: the unpack writes the
 /// template's files over the same paths and leaves every other file alone.
@@ -19,7 +24,10 @@ import '../validation/validator_base.dart';
 class TargetValidator extends ValidatorBase<String> {
   const TargetValidator({this.overwrite = false});
 
-  static const parentNotFound = 'TARGET_PARENT_NOT_FOUND';
+  /// The target, or a directory on the way to it, is a file.
+  static const notDirectory = 'TARGET_NOT_DIRECTORY';
+
+  /// The target is a non-empty directory, and [overwrite] is off.
   static const occupied = 'TARGET_OCCUPIED';
   static const notWritable = 'TARGET_NOT_WRITABLE';
   static const pathConflict = 'TARGET_PATH_CONFLICT';
@@ -33,40 +41,39 @@ class TargetValidator extends ValidatorBase<String> {
   @override
   ValidationResult validate(String input) {
     final absolute = p.absolute(input);
-    final parent = Directory(p.dirname(absolute));
-    if (!parent.existsSync()) {
-      return ValidationResult([
-        ValidationError(
-          parentNotFound,
-          'Parent directory does not exist: ${parent.path}',
-        ),
-      ]);
+
+    // The target itself, then each parent up to the first that exists: the
+    // directories the unpack will create, and the one it creates them in.
+    var existing = absolute;
+    var type = FileSystemEntity.typeSync(existing);
+    while (type == .notFound && p.dirname(existing) != existing) {
+      existing = p.dirname(existing);
+      type = FileSystemEntity.typeSync(existing);
+    }
+    if (type != .directory) {
+      final what = existing == absolute
+          ? 'Target already exists and is a file, not a directory: $input'
+          : 'Cannot create target $input: $existing is a file, not a '
+                'directory.';
+      return ValidationResult([ValidationError(notDirectory, what)]);
     }
 
     final dir = Directory(input);
-    if (File(input).existsSync()) {
+    if (!overwrite && existing == absolute && dir.listSync().isNotEmpty) {
       return ValidationResult([
         ValidationError(
           occupied,
-          'Target already exists and is a file, not a directory: $input',
-        ),
-      ]);
-    }
-
-    if (!overwrite && dir.existsSync() && dir.listSync().isNotEmpty) {
-      return ValidationResult([
-        ValidationError(
-          occupied,
-          'Target already exists and is not empty: $input '
-          '(--force writes into it).',
+          'Target already exists and is not empty: $input; only an '
+          'overwrite unpack writes into one.',
         ),
       ]);
     }
 
     // When the target already exists, it is the directory files get written
-    // into — probing the parent would pass on a read-only target and let
-    // writeAsStringSync throw uncaught later.
-    final probeDir = dir.existsSync() ? dir : parent;
+    // into — probing its parent would pass on a read-only target and let
+    // writeAsStringSync throw uncaught later. When it does not, the first
+    // existing parent is where the unpack creates the missing directories.
+    final probeDir = Directory(existing);
     if (!_canWrite(probeDir)) {
       return ValidationResult([
         ValidationError(

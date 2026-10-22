@@ -68,6 +68,37 @@ void main() {
         expect(src, contains('\n// ignore_for_file: type=lint\n'));
       }
     });
+
+    test('a doc comment goes right above the constant, in both formats', () {
+      const doc = 'The starter app.\n\nUnpack with `Unbundler`.';
+      final bytes = embed.bytesSource(
+        archive: archive,
+        name: 'super_server',
+        doc: doc,
+      );
+      final b64 = embed.base64Source(
+        archive: archive,
+        name: 'super_server',
+        doc: doc,
+      );
+
+      const comment =
+          '/// The starter app.\n///\n/// Unpack with `Unbundler`.\n';
+      expect(bytes, contains('${comment}const List<int> kSuperServerTemplate'));
+      expect(
+        b64,
+        contains('${comment}const String kSuperServerTemplateBase64'),
+      );
+      expect(embed.archiveOf(bytes), archive);
+      expect(embed.archiveOf(b64), archive);
+    });
+
+    test('no doc, or a blank one, adds no comment', () {
+      expect(
+        embed.base64Source(archive: archive, name: 'a', doc: '  \n'),
+        embed.base64Source(archive: archive, name: 'a'),
+      );
+    });
   });
 
   group('EmbedSource output under consumer tooling', () {
@@ -103,6 +134,16 @@ void main() {
             ),
           );
         }
+      }
+      for (final length in [0, 30, 100]) {
+        writeBothStyles(
+          'doc_$length',
+          embed.base64Source(
+            archive: List.generate(length, (i) => i),
+            name: 'super_server',
+            doc: 'The template.\n\nSecond paragraph.',
+          ),
+        );
       }
       for (var length = 0; length <= 40; length++) {
         writeBothStyles(

@@ -434,7 +434,9 @@ class ProjectValidator extends ValidatorBase<ProjectInput> {
 
   /// The transform that spells [token] as [spelling] exactly, if any.
   static CaseTransform? _transformFor(String token, String spelling) =>
-      CaseTransform.values.where((t) => t.apply(token) == spelling).firstOrNull;
+      CaseTransform.values
+          .where((t) => t.spellsToken && t.apply(token) == spelling)
+          .firstOrNull;
 
   /// Runs [search] over every packed path and every substituted text, the
   /// way unpacking will meet them.

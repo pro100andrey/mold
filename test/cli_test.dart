@@ -236,7 +236,8 @@ variables:
       final archive = p.join(tmp.path, 'out.mold');
       expect(await runMoldCli(['pack', project.path, '-o', archive]), 0);
 
-      final target = p.join(tmp.path, 'never_created');
+      // Its parents are missing too: checked, not created.
+      final target = p.join(tmp.path, 'new', 'nested', 'never_created');
       final err = _Sink();
       final code = await runMoldCli([
         'unpack',
@@ -253,7 +254,7 @@ variables:
       expect(err.text, contains('Dry run'));
       expect(err.text, contains('main.dart'));
       expect(
-        Directory(target).existsSync(),
+        Directory(p.join(tmp.path, 'new')).existsSync(),
         isFalse,
         reason: 'a dry run must not create the target',
       );

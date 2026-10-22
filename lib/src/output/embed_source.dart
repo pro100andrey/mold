@@ -44,10 +44,17 @@ class EmbedSource {
       'k${const CaseConverter().toPascal(manifestName)}Template';
 
   /// A Dart source declaring `const List<int> kXxxTemplate = [...]`.
-  String bytesSource({required List<int> archive, required String name}) {
+  ///
+  /// [doc] becomes the constant's doc comment, one `///` line per line of it.
+  String bytesSource({
+    required List<int> archive,
+    required String name,
+    String? doc,
+  }) {
     final buffer = StringBuffer()
       ..write(_header)
       ..writeln()
+      ..write(_docComment(doc))
       ..writeln('const List<int> ${constName(name)} = <int>[')
       ..writeln('  // ${archive.length} bytes: a gzipped tar archive.');
     for (var i = 0; i < archive.length; i += _bytesPerRow) {
@@ -105,7 +112,13 @@ class EmbedSource {
   );
 
   /// A Dart source declaring a base64 `const String kXxxTemplateBase64`.
-  String base64Source({required List<int> archive, required String name}) {
+  ///
+  /// [doc] becomes the constant's doc comment, one `///` line per line of it.
+  String base64Source({
+    required List<int> archive,
+    required String name,
+    String? doc,
+  }) {
     final declaration = 'const String ${constName(name)}Base64 =';
     final literal = "'${base64.encode(archive)}';";
     final oneLine = '$declaration $literal';
@@ -113,6 +126,21 @@ class EmbedSource {
         ? oneLine
         : '$declaration\n    $literal';
 
-    return '$_header\n$body\n';
+    return '$_header\n${_docComment(doc)}$body\n';
+  }
+
+  /// [doc] as `///` lines, each ending in a newline; empty for none.
+  ///
+  /// Lines are kept as given: the formatter leaves comments alone, so one
+  /// longer than the page is the caller's to wrap.
+  static String _docComment(String? doc) {
+    if (doc == null || doc.trim().isEmpty) {
+      return '';
+    }
+
+    return [
+      for (final line in const LineSplitter().convert(doc.trimRight()))
+        '///${line.isEmpty ? '' : ' $line'}\n',
+    ].join();
   }
 }
