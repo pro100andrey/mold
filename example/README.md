@@ -30,7 +30,7 @@ extra_substitutions:
 
 ```console
 $ dart run example/mold_example.dart
-Packed 604 bytes.
+Packed 598 bytes.
 Unpacked into /tmp/mold_example_XXXX/acme_shop:
   name: acme_shop
   const banner = 'Welcome to Acme Shop';

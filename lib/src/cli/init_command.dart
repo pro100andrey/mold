@@ -41,7 +41,7 @@ class InitCommand extends MoldCommand {
         'yes',
         abbr: 'y',
         negatable: false,
-        help: 'Add the suggested extra_substitutions without asking.',
+        help: 'Add the suggested entries without asking.',
       )
       ..addFlag(
         'no-prompt',

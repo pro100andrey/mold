@@ -15,7 +15,9 @@ class UnpackCommand extends MoldCommand {
     argParser.addOption(
       'target',
       abbr: 't',
-      help: 'Destination dir (default: ./<name>; required with -).',
+      help:
+          'Destination dir (default: ./<archive name without extension>; '
+          'required with -).',
     );
     addVarOptions('');
     argParser

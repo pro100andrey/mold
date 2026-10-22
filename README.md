@@ -112,7 +112,7 @@ mold unpack super_server.mold -t ./my_project --var project_name=my_project
 mold init [dir] [options]
   --token          The name to replace        (default: detected, see below)
   --variable       The variable replacing it  (default: project_name)
-  --yes,      -y   Add the suggested extra_substitutions without asking
+  --yes,      -y   Add the suggested entries without asking
   --no-prompt      Never ask; leave the suggestions out
   --force          Overwrite an existing mold.yaml
   --dry-run        Print the manifest on stdout instead of writing it
@@ -151,6 +151,16 @@ mold inspect <archive | -> [options]
   --json           Print the description as JSON on stdout
 ```
 
+`mold help <command>` for the full option list. During development:
+`dart run mold:mold pack ./super_server`.
+
+Human-facing output goes to stderr; stdout carries only `--json` documents.
+Under `--json`, warnings are part of the document, and a failure is a document
+too — `{"errors": [{"code": …, "message": …}], "warnings": […]}` with exit 1 —
+so a tool reading stdout always gets JSON. Failures that carry no library code
+use `CLI_USAGE` (bad arguments, a missing vars file — exit 64) and
+`IO_FAILURE` (exit 1).
+
 ### Starting a manifest
 
 `mold init ./app_template` writes a starting `mold.yaml`: the project's own
@@ -158,7 +168,7 @@ name as the `replaces` token of one variable, `project_name`, and the manifest
 itself excluded from what it packs. The name is read from the project's
 package manifest — `pubspec.yaml`, `package.json`, `composer.json`,
 `Cargo.toml`, `go.mod`, `pyproject.toml`, `settings.gradle(.kts)`, `pom.xml`,
-`Package.swift` or a lone `*.csproj` — else taken from the directory;
+`Package.swift` or a lone `.csproj`, `.fsproj` or `.vbproj` — else taken from the directory;
 `--token` names it instead.
 
 It then runs the pack's checks on that draft. Spellings of the name the four
@@ -215,16 +225,6 @@ stdin then carries the archive, so nothing can be prompted for: values come
 from `--var`, `--vars-file` and defaults, as under `--no-prompt`, and
 `--target` is required — there is no file name to derive it from.
 `mold inspect -` works the same way.
-
-`mold help <command>` for the full option list. During development:
-`dart run mold:mold pack ./super_server`.
-
-Human-facing output goes to stderr; stdout carries only `--json` documents.
-Under `--json`, warnings are part of the document, and a failure is a document
-too — `{"errors": [{"code": …, "message": …}], "warnings": […]}` with exit 1 —
-so a tool reading stdout always gets JSON. Failures that carry no library code
-use `CLI_USAGE` (bad arguments, a missing vars file — exit 64) and
-`IO_FAILURE` (exit 1).
 
 ### Inspecting a template
 
@@ -438,8 +438,10 @@ substitution warns as `MANIFEST_UNUSED_VARIABLE`.
 
 A variable can constrain its value: `pattern` is a regular expression the
 **whole** value must match (it is anchored for you), and `choices` lists the
-only values allowed — the prompt shows them, and asks again for an answer
-outside them rather than failing the unpack after every other prompt.
+only values allowed — the prompt shows them. An answer the variable refuses
+— outside `choices`, not matching `pattern`, not a name its casings can be
+derived from — is explained and asked again, up to three times, rather than
+failing the unpack after every other prompt.
 
 ```yaml
 variables:
@@ -460,9 +462,11 @@ share `MyApp`) warn as `MANIFEST_CONFLICTING_TOKENS`: those sites take the
 later variable's value.
 
 Resolution precedence: explicit `--var` › `--vars-file` › manifest `default` ›
-interactive prompt. End of input is not an answer — with stdin closed, a variable with no
-default stays unresolved and is reported as `VARIABLE_MISSING`, rather than
-silently becoming an empty string.
+interactive prompt. End of input is not an answer — with stdin closed, a
+variable with no default stays unresolved and is reported as
+`VARIABLE_MISSING`, rather than silently becoming an empty string; input that
+ends after a refused answer keeps that answer, to fail on it, rather than
+falling back to the default.
 
 ### Substitutions
 
@@ -785,7 +789,7 @@ stderr.
 | pack   | `MANIFEST_MALFORMED_PLACEHOLDER`    | bad syntax inside `{{ }}`                      |
 | pack   | `MANIFEST_UNTERMINATED_PLACEHOLDER` | `{{` with no `}}`                              |
 | pack   | `MANIFEST_UNKNOWN_VARIABLE`         | placeholder names an undeclared variable       |
-| pack   | `MANIFEST_UNKNOWN_TRANSFORM`        | not one of the six transforms                  |
+| pack   | `MANIFEST_UNKNOWN_TRANSFORM`        | not one of the transforms listed above         |
 | pack   | `MANIFEST_UNUSED_VARIABLE` ⚠        | variable does nothing                          |
 | pack   | `MANIFEST_DUPLICATE_SUBSTITUTION`   | two entries in one section share a `from`      |
 | pack   | `MANIFEST_CONFLICTING_TOKENS` ⚠     | two variables derive the same casing           |
@@ -1064,7 +1068,8 @@ On a 48 MB, 1731-file corpus: pack ~2.2 s (half of it the portable deflate;
 
 - **Templating the packed files.** Project content is never evaluated — no
   conditionals, loops, partials or includes, and a `{{ }}` inside a packed file
-  is just text. The one place `{{ }}` is interpreted is a manifest `to:` value.
+  is just text. `{{ }}` is interpreted only in the manifest: a `to:` value
+  and the `message`.
 - **Content-based binary detection** — extensions only, no MIME sniffing. The
   UTF-8 fallback is a decode failure, not classification.
 - **File modes beyond the executable bit** — no ownership, no full mode round

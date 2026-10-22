@@ -59,7 +59,8 @@ class TemplateError {
   String toString() => message;
 }
 
-/// A substitution's `to:` value, parsed into literals and placeholders.
+/// A substitution's `to:` value or a manifest's `message`, parsed into
+/// literals and placeholders.
 ///
 /// Parsing **never throws**: a malformed template yields a value whose [errors]
 /// are non-empty, so `ManifestValidator` can report every problem in a manifest

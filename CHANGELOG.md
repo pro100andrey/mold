@@ -247,8 +247,7 @@ about 130 ms more on the corpus above.
   Maven, Swift, .NET) or the directory — as one variable's token, the
   manifest excluded. It runs the pack's checks on the draft and offers the
   entries `PROJECT_UNCOVERED_CASING` would suggest, in `extra_substitutions`
-  or `path_renames` as each spelling needs (`--yes` adds them unasked);
-  `ProjectValidator.onSuggestion` hands them over as data.
+  or `path_renames` as each spelling needs (`--yes` adds them unasked).
 - **`message:`** in the manifest — next steps, rendered with the values
   like a substitution's `to:` and validated like one — printed after
   `Unpacked into …`, carried as `message` in `--json` and

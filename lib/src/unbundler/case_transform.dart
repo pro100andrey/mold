@@ -1,7 +1,7 @@
 import 'case_converter.dart';
 
-/// A named case conversion, usable in a manifest substitution's `to:` value as
-/// `{{ variable | transform }}`.
+/// A named case conversion, usable in a manifest substitution's `to:` value
+/// and in its `message` as `{{ variable | transform }}`.
 ///
 /// The enum identifiers **are** the names written in the manifest, so a lookup
 /// is `CaseTransform.values.byName(...)` and the "valid transforms are …"
